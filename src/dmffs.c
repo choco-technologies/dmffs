@@ -860,8 +860,6 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx,
         handle->current_offset = 8 + length;
     }
     
-    DMOD_LOG_INFO("_opendir: initial offset=0x%X\n", handle->current_offset);
-    
     // If opening a subdirectory, find it first
     if (handle->path[0] != '\0') {
         uint32_t offset = handle->current_offset;
@@ -928,8 +926,6 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
     }
     
     dmffs_dir_handle_t* handle = (dmffs_dir_handle_t*)dp;
-    DMOD_LOG_INFO("_readdir: offset=0x%X, in_dir=%d, entry_index=%d\n", 
-                  handle->current_offset, handle->in_dir, handle->entry_index);
     
     // Special case: no valid TLV structure, return data.bin for root
     if (handle->entry_index < 0) {
@@ -948,14 +944,10 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
     while (handle->current_offset < end_offset) {
         uint32_t type, length;
         if (!read_tlv_header(ctx, handle->current_offset, &type, &length)) {
-            DMOD_LOG_ERROR("Failed to read TLV header at offset 0x%X\n", handle->current_offset);
             break;
         }
         
-        DMOD_LOG_INFO("  TLV at 0x%X: type=%u, length=0x%X\n", handle->current_offset, type, length);
-        
         if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
-            DMOD_LOG_INFO("  END or INVALID type, breaking\n");
             break;
         }
         
