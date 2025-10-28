@@ -1,0 +1,43 @@
+diff --git a/src/system/public/dmod_dmf_api.c b/src/system/public/dmod_dmf_api.c
+index original..fixed 100644
+--- a/src/system/public/dmod_dmf_api.c
++++ b/src/system/public/dmod_dmf_api.c
+@@ -22,10 +22,27 @@ bool Dmod_ConnectApi( Dmod_Api_t* OutputsApi, Dmod_Api_t* InputsApi )
+     size_t numberOfOutputs = Dmod_Api_GetNumberOfEntries( OutputsApi );
+     size_t numberOfInputs = Dmod_Api_GetNumberOfEntries( InputsApi );
+ 
++    // Safety checks to prevent crash from memory corruption
++    if (numberOfOutputs > 1000 || numberOfInputs > 1000) {
++        DMOD_LOG_ERROR("Unreasonable number of APIs detected (outputs=%zu, inputs=%zu)\n", 
++                       numberOfOutputs, numberOfInputs);
++        return false;
++    }
++    
++    if (OutputsApi->OutputSection == NULL || InputsApi->InputSection == NULL ||
++        OutputsApi->OutputSection->Entries == NULL || InputsApi->InputSection->Entries == NULL) {
++        DMOD_LOG_ERROR("API section pointers are NULL\n");
++        return false;
++    }
++
+     for(size_t i = 0; i < numberOfOutputs; i++)
+     {
+         for(size_t j = 0; j < numberOfInputs; j++)
+         {
++            // Skip NULL signatures to prevent crash
++            if (InputsApi->InputSection->Entries[j].Signature == NULL) {
++                continue;
++            }
++            
+             if( !Dmod_ApiSignature_IsValid( OutputsApi->OutputSection->Entries[i] ) )
+             {
+                 continue;
+             }
+             else if( Dmod_ApiSignature_AreEqual( OutputsApi->OutputSection->Entries[i], InputsApi->InputSection->Entries[j].Signature ) )
+             {
+                 DMOD_LOG_VERBOSE("Connected: %s 0x%08X\n", InputsApi->InputSection->Entries[j].Signature, InputsApi->InputSection->Entries[j].Function);
+                 OutputsApi->OutputSection->Entries[i] = InputsApi->InputSection->Entries[j].Function);
+             }
+         }
+     }
+     return true;
+ }
