@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.18)
 
-set(DMOD_DIR "/home/pkubiak/Projects/choco-technologies/public/dmod")
+# DMOD_DIR must be set (either via command line or environment variable)
+if(NOT DEFINED DMOD_DIR)
+    if(DEFINED ENV{DMOD_DIR})
+        set(DMOD_DIR $ENV{DMOD_DIR})
+    else()
+        message(FATAL_ERROR "DMOD_DIR is not set. Please set it to the path of the DMOD repository")
+    endif()
+endif()
 set(DMOD_MODE "DMOD_MODULE" CACHE STRING "Mode" FORCE)
 set(DMOD_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
@@ -30,5 +37,9 @@ set(DMOD_STACK_SIZE         1024)
 #
 dmod_add_library(${DMOD_MODULE_NAME} "0.1"
     # List of source files - can include C and C++ files
-    dmffs.c
+    src/dmffs.c
+)
+
+target_include_directories(${DMOD_MODULE_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
