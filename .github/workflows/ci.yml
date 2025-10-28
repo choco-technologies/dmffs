@@ -7,7 +7,7 @@ on:
     branches: [ main, develop ]
 
 jobs:
-  build:
+  build-and-test:
     name: Build and Test
     runs-on: ubuntu-latest
     container:
@@ -17,14 +17,57 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Build with CMake
+      - name: Build dmffs project
         run: |
           mkdir -p build
           cd build
           cmake .. -DDMOD_MODE=DMOD_MODULE
           cmake --build .
       
-      - name: Build with Make
+      - name: Build dmod_loader
         run: |
-          make clean
-          make DMOD_MODE=DMOD_MODULE
+          mkdir -p build_dmod
+          cd build_dmod
+          cmake ../build/_deps/dmod-src -DDMOD_MODE=DMOD_SYSTEM
+          cmake --build . --target dmod_loader
+      
+      - name: Prepare test filesystem
+        run: |
+          mkdir -p /tmp/flashfs/subdir
+          echo "Hello from DMFFS!" > /tmp/flashfs/hello.txt
+          echo "Test file 1" > /tmp/flashfs/test1.txt
+          echo "File in subdirectory" > /tmp/flashfs/subdir/nested.txt
+          echo "Config data" > /tmp/flashfs/config.cfg
+          echo "Test filesystem created:"
+          find /tmp/flashfs -type f -exec echo "  {}" \;
+      
+      - name: Create filesystem image with make_dmffs
+        run: |
+          ./build_dmod/examples/system/dmod_loader/dmod_loader \
+            ./build/_deps/dmod-build/dmf/make_dmffs.dmf \
+            --args /tmp/flashfs /tmp/flash-fs.ffs
+          echo "Filesystem image created:"
+          ls -lh /tmp/flash-fs.ffs
+      
+      - name: Clone and build dmvfs
+        run: |
+          cd /tmp
+          git clone https://github.com/choco-technologies/dmvfs.git
+          cd dmvfs
+          mkdir build
+          cd build
+          cmake .. -DDMOD_MODE=DMOD_SYSTEM -DDMOD_MEMORY="08080000:/tmp/flash-fs.ffs"
+          cmake --build .
+          echo "dmvfs built successfully, fs_tester available at:"
+          ls -lh ./tests/fs_tester
+      
+      - name: Run filesystem tests
+        run: |
+          export FLASH_FS_ADDR="0x08080000"
+          export FLASH_FS_SIZE="0x1000"
+          echo "Running filesystem tests in read-only mode..."
+          /tmp/dmvfs/build/tests/fs_tester --read-only-fs \
+            --test-file /mnt/hello.txt \
+            --test-dir /mnt \
+            ./build/_deps/dmod-build/dmf/dmffs.dmf
+          echo "Filesystem test completed successfully"
