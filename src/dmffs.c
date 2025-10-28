@@ -357,12 +357,15 @@ static bool find_file_by_path(dmfsi_context_t ctx, const char* path, dmffs_file_
                             dmffs_file_entry_t file_entry;
                             uint32_t next_offset = parse_file_entry(ctx, nested_offset, &file_entry);
                             
-                            if (next_offset > 0 && strcmp(file_entry.name, filename) == 0) {
+                            if (next_offset == 0) {
+                                // Parse error - skip this TLV entry manually
+                                nested_offset += 8 + nested_length;
+                            } else if (strcmp(file_entry.name, filename) == 0) {
                                 memcpy(entry, &file_entry, sizeof(dmffs_file_entry_t));
                                 return true;
+                            } else {
+                                nested_offset = next_offset;
                             }
-                            
-                            nested_offset = next_offset;
                         } else {
                             nested_offset += 8 + nested_length;
                         }
@@ -393,11 +396,14 @@ static bool find_file_by_path(dmfsi_context_t ctx, const char* path, dmffs_file_
         if (type == DMFFS_TLV_TYPE_FILE) {
             uint32_t next_offset = parse_file_entry(ctx, offset, entry);
             
-            if (next_offset > 0 && strcmp(entry->name, filename) == 0) {
+            if (next_offset == 0) {
+                // Parse error - skip this TLV entry manually
+                offset += 8 + length;
+            } else if (strcmp(entry->name, filename) == 0) {
                 return true;
+            } else {
+                offset = next_offset;
             }
-            
-            offset = next_offset;
         } else {
             offset += 8 + length;
         }
@@ -584,7 +590,10 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fopen, (dmfsi_context_t ctx, v
     }
     
     // Only support read operations
-    if (mode & (DMFSI_O_WRONLY | DMFSI_O_RDWR | DMFSI_O_CREAT | DMFSI_O_TRUNC)) {
+    // Check if any write/create/trunc flags are set
+    int access_mode = mode & 0x0003; // Mask out access mode bits
+    if (access_mode == DMFSI_O_WRONLY || access_mode == DMFSI_O_RDWR ||
+        (mode & (DMFSI_O_CREAT | DMFSI_O_TRUNC))) {
         return DMFSI_ERR_INVALID;
     }
     
