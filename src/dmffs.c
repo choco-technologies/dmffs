@@ -1,5 +1,51 @@
 #include "dmod.h"
 #include "dmffs.h"
+#include "dmffs_defs.h"
+
+static const void* g_flash_addr = NULL;
+static size_t g_flash_size = 0;
+
+/**
+ * @brief Simple hex string parser for embedded systems
+ * 
+ * @param hex_str String in format "0x1234ABCD" or "1234ABCD"
+ * @return Parsed value or 0 if parsing failed
+ */
+static size_t parse_hex_string(const char* hex_str)
+{
+    if (!hex_str) return 0;
+    
+    size_t result = 0;
+    const char* ptr = hex_str;
+    
+    // Skip "0x" prefix if present
+    if (ptr[0] == '0' && (ptr[1] == 'x' || ptr[1] == 'X')) {
+        ptr += 2;
+    }
+    
+    // Parse hex digits
+    while (*ptr) {
+        char c = *ptr;
+        int digit_value = -1;
+        
+        if (c >= '0' && c <= '9') {
+            digit_value = c - '0';
+        } else if (c >= 'A' && c <= 'F') {
+            digit_value = c - 'A' + 10;
+        } else if (c >= 'a' && c <= 'f') {
+            digit_value = c - 'a' + 10;
+        } else {
+            // Invalid character, stop parsing
+            DMOD_LOG_ERROR("Invalid character in hex (%s) string: '%c'\n", hex_str, c);
+            break;
+        }
+        
+        result = (result << 4) | digit_value;
+        ptr++;
+    }
+    
+    return result;
+}
 
 /**
  * @brief Pre-initialization function for the module.
@@ -32,7 +78,31 @@ void dmod_preinit(void)
  */
 int dmod_init(const Dmod_Config_t *Config)
 {
-    Dmod_Printf("Hello, World!\n");
+    const char* flash_addr_str = Dmod_GetEnv( DMFFS_ENV_FLASH_ADDR );
+    const char* flash_size_str = Dmod_GetEnv( DMFFS_ENV_FLASH_SIZE );
+    
+    // Parse flash address from hex string (e.g., "0x08000000")
+    if (flash_addr_str) {
+        size_t addr = parse_hex_string(flash_addr_str);
+        g_flash_addr = (const void*)addr;
+        
+        DMOD_LOG_INFO("Flash address set to: 0x%08X\n", (unsigned int)addr);
+    } else {
+        DMOD_LOG_ERROR("Flash address not configured. '%s' variable is not set (hex value required)\n", DMFFS_ENV_FLASH_ADDR);
+        return -1;
+    }
+    
+    // Parse flash size from hex string (e.g., "0x100000" for 1MB)
+    if (flash_size_str) {
+        size_t size = parse_hex_string(flash_size_str);
+        g_flash_size = size;
+        
+        DMOD_LOG_INFO("Flash size set to: 0x%08X (%u bytes)\n", (unsigned int)size, (unsigned int)size);
+    } else {
+        DMOD_LOG_ERROR("Flash size not configured. '%s' variable is not set (hex value required)\n", DMFFS_ENV_FLASH_SIZE);
+        return -1;
+    }
+    
     return 0;
 }
 

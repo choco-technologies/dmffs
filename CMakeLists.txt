@@ -12,21 +12,48 @@ project(dmffs
     DESCRIPTION "DMOD Flash File System"
     LANGUAGES C CXX)
 
-# DMOD_DIR must be set (either via command line or environment variable)
-if(NOT DEFINED DMOD_DIR)
-    if(DEFINED ENV{DMOD_DIR})
-        set(DMOD_DIR $ENV{DMOD_DIR})
-    else()
-        message(FATAL_ERROR "DMOD_DIR is not set. Please set it to the path of the DMOD repository")
-    endif()
-endif()
-set(DMOD_MODE "DMOD_MODULE" CACHE STRING "Mode" FORCE)
-set(DMOD_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+# ======================================================================
+#               Fetch DMOD repository
+# ======================================================================
+include(FetchContent)
+FetchContent_Declare(
+    dmod
+    GIT_REPOSITORY https://github.com/choco-technologies/dmod.git
+    GIT_TAG        develop
+)
 
+# ======================================================================
+#               DMOD Configuration
+# ======================================================================
+set(DMOD_MODE "DMOD_MODULE" CACHE STRING "DMOD build mode")
+set(DMOD_BUILD_TESTS OFF CACHE BOOL "Build tests")
+set(DMOD_BUILD_EXAMPLES OFF CACHE BOOL "Build examples")
+set(DMOD_BUILD_TOOLS OFF CACHE BOOL "Build tools")
+set(DMOD_BUILD_TEMPLATES OFF CACHE BOOL "Build templates")
+
+FetchContent_MakeAvailable(dmod)
+
+# ======================================================================
+#               Import dmod functions and macros
+# ======================================================================
+set(DMOD_DIR ${dmod_SOURCE_DIR} CACHE PATH "DMOD source directory")
 include(${DMOD_DIR}/paths.cmake)
-
 dmod_setup_external_module()
 
+# ======================================================================
+#               Fetch DMOD File System Interface
+# ======================================================================
+FetchContent_Declare(
+    dmfsi
+    GIT_REPOSITORY
+    https://github.com/choco-technologies/dmfsi.git
+    GIT_TAG        master
+)
+FetchContent_MakeAvailable(dmfsi)
+
+# ======================================================================
+#               DMFFS Module Configuration
+# ======================================================================
 # Name of the module 
 set(DMOD_MODULE_NAME        dmffs)
 
@@ -53,3 +80,6 @@ dmod_add_library(${DMOD_MODULE_NAME} "0.1"
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+# Link to DMFSI interface
+target_link_libraries(${DMOD_MODULE_NAME} dmfsi_if)
