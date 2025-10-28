@@ -225,9 +225,13 @@ static uint32_t parse_file_entry(dmfsi_context_t ctx, uint32_t offset, dmffs_fil
         
         switch (nested_type) {
             case DMFFS_TLV_TYPE_NAME:
-                if (nested_length < sizeof(entry->name)) {
+                if (nested_length > 0 && nested_length <= sizeof(entry->name) - 1) {
                     read_tlv_value(ctx, value_offset, entry->name, nested_length);
                     entry->name[nested_length] = '\0';
+                } else if (nested_length > sizeof(entry->name) - 1) {
+                    // Truncate to fit
+                    read_tlv_value(ctx, value_offset, entry->name, sizeof(entry->name) - 1);
+                    entry->name[sizeof(entry->name) - 1] = '\0';
                 }
                 break;
                 
@@ -456,7 +460,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fopen, (dmfsi_context_t ctx, v
         }
         
         memset(handle, 0, sizeof(dmffs_file_handle_t));
-        strcpy(handle->entry.name, "data.bin");
+        strncpy(handle->entry.name, "data.bin", sizeof(handle->entry.name) - 1);
+        handle->entry.name[sizeof(handle->entry.name) - 1] = '\0';
         handle->entry.data_offset = 0;
         handle->entry.data_size = ctx->flash_size;
         handle->entry.attr = DMFSI_ATTR_READONLY;
@@ -561,7 +566,11 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fread, (dmfsi_context_t ctx, v
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fwrite, (dmfsi_context_t ctx, void* fp, const void* buffer, size_t size, size_t* written) )
 {
-    return DMFSI_OK;
+    if (written) {
+        *written = 0;
+    }
+    // Read-only file system
+    return DMFSI_ERR_INVALID;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, long, _lseek, (dmfsi_context_t ctx, void* fp, long offset, int whence) )
@@ -637,6 +646,10 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _getc, (dmfsi_context_t ctx, vo
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _putc, (dmfsi_context_t ctx, void* fp, int c) )
 {
+    // Read-only file system - putc not supported
+    if (!ctx || !fp) {
+        return -1;
+    }
     return -1;
 }
 
@@ -737,7 +750,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
                 
                 if (next_offset > 0 && file_entry.name[0] != '\0') {
                     // Return this file
-                    strcpy(entry->name, file_entry.name);
+                    strncpy(entry->name, file_entry.name, sizeof(entry->name) - 1);
+                    entry->name[sizeof(entry->name) - 1] = '\0';
                     entry->size = file_entry.data_size;
                     entry->attr = file_entry.attr;
                     entry->time = file_entry.mtime;
@@ -753,7 +767,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
     
     // No more files found, return data.bin if we haven't yet
     if (handle->entry_index < 0) {
-        strcpy(entry->name, "data.bin");
+        strncpy(entry->name, "data.bin", sizeof(entry->name) - 1);
+        entry->name[sizeof(entry->name) - 1] = '\0';
         entry->size = ctx->flash_size;
         entry->attr = DMFSI_ATTR_READONLY;
         entry->time = 0;
