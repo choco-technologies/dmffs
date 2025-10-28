@@ -157,6 +157,11 @@ static bool read_tlv_header(dmfsi_context_t ctx, uint32_t offset, uint32_t* type
 {
     if (!ctx || !type || !length) return false;
     
+    // Check if we can read the header (8 bytes)
+    if (offset + 8 > ctx->flash_size) {
+        return false;
+    }
+    
     uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + offset;
     
     // Read type (4 bytes)
@@ -850,9 +855,12 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx,
     
     // Skip VERSION tag if present
     uint32_t type, length;
+    handle->current_offset = 0;
     if (read_tlv_header(ctx, 0, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
         handle->current_offset = 8 + length;
     }
+    
+    DMOD_LOG_INFO("_opendir: initial offset=0x%X\n", handle->current_offset);
     
     // If opening a subdirectory, find it first
     if (handle->path[0] != '\0') {
@@ -920,6 +928,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
     }
     
     dmffs_dir_handle_t* handle = (dmffs_dir_handle_t*)dp;
+    DMOD_LOG_INFO("_readdir: offset=0x%X, in_dir=%d, entry_index=%d\n", 
+                  handle->current_offset, handle->in_dir, handle->entry_index);
     
     // Special case: no valid TLV structure, return data.bin for root
     if (handle->entry_index < 0) {
@@ -938,27 +948,37 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
     while (handle->current_offset < end_offset) {
         uint32_t type, length;
         if (!read_tlv_header(ctx, handle->current_offset, &type, &length)) {
+            DMOD_LOG_ERROR("Failed to read TLV header at offset 0x%X\n", handle->current_offset);
             break;
         }
         
+        DMOD_LOG_INFO("  TLV at 0x%X: type=%u, length=0x%X\n", handle->current_offset, type, length);
+        
         if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+            DMOD_LOG_INFO("  END or INVALID type, breaking\n");
             break;
         }
         
         if (type == DMFFS_TLV_TYPE_FILE) {
             dmffs_file_entry_t file_entry;
             uint32_t next_offset = parse_file_entry(ctx, handle->current_offset, &file_entry);
-            handle->current_offset = next_offset;
             
-            if (next_offset > 0 && file_entry.name[0] != '\0') {
-                // Return this file
-                strncpy(entry->name, file_entry.name, sizeof(entry->name) - 1);
-                entry->name[sizeof(entry->name) - 1] = '\0';
-                entry->size = file_entry.data_size;
-                entry->attr = file_entry.attr;
-                entry->time = file_entry.mtime;
-                handle->entry_index++;
-                return DMFSI_OK;
+            if (next_offset == 0) {
+                // Parse error - skip this TLV entry manually
+                handle->current_offset += 8 + length;
+            } else {
+                handle->current_offset = next_offset;
+                
+                if (file_entry.name[0] != '\0') {
+                    // Return this file
+                    strncpy(entry->name, file_entry.name, sizeof(entry->name) - 1);
+                    entry->name[sizeof(entry->name) - 1] = '\0';
+                    entry->size = file_entry.data_size;
+                    entry->attr = file_entry.attr;
+                    entry->time = file_entry.mtime;
+                    handle->entry_index++;
+                    return DMFSI_OK;
+                }
             }
         } else if (type == DMFFS_TLV_TYPE_DIR && !handle->in_dir) {
             // At root level, list directories
