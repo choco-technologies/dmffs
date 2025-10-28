@@ -22,6 +22,36 @@ struct dmfsi_context
 };
 
 /**
+ * @brief File entry metadata parsed from TLV
+ */
+typedef struct {
+    char name[256];             //!< file name
+    uint32_t data_offset;       //!< offset to file data in flash
+    uint32_t data_size;         //!< size of file data
+    uint32_t attr;              //!< file attributes
+    uint32_t mtime;             //!< modification time
+    uint32_t ctime;             //!< creation time
+} dmffs_file_entry_t;
+
+/**
+ * @brief File handle structure
+ */
+typedef struct {
+    dmffs_file_entry_t entry;   //!< file entry metadata
+    long position;              //!< current read position
+    dmfsi_context_t ctx;        //!< file system context
+} dmffs_file_handle_t;
+
+/**
+ * @brief Directory handle structure
+ */
+typedef struct {
+    dmfsi_context_t ctx;        //!< file system context
+    uint32_t current_offset;    //!< current offset in flash for scanning
+    int entry_index;            //!< current entry index
+} dmffs_dir_handle_t;
+
+/**
  * @brief Simple hex string parser for embedded systems
  * 
  * @param hex_str String in format "0x1234ABCD" or "1234ABCD"
@@ -109,6 +139,154 @@ static bool parse_config_string( dmfsi_context_t ctx, const char* config )
     }
     
     return true;
+}
+
+/**
+ * @brief Read a TLV header from flash
+ * 
+ * @param ctx File system context
+ * @param offset Offset in flash to read from
+ * @param type Pointer to store TLV type
+ * @param length Pointer to store TLV length
+ * @return true if successful, false otherwise
+ */
+static bool read_tlv_header(dmfsi_context_t ctx, uint32_t offset, uint32_t* type, uint32_t* length)
+{
+    if (!ctx || !type || !length) return false;
+    
+    uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + offset;
+    
+    // Read type (4 bytes)
+    if (Dmod_ReadMemory(flash_addr, type, sizeof(uint32_t)) != sizeof(uint32_t)) {
+        return false;
+    }
+    
+    // Read length (4 bytes)
+    if (Dmod_ReadMemory(flash_addr + sizeof(uint32_t), length, sizeof(uint32_t)) != sizeof(uint32_t)) {
+        return false;
+    }
+    
+    return true;
+}
+
+/**
+ * @brief Read TLV value from flash
+ * 
+ * @param ctx File system context
+ * @param offset Offset in flash (after header)
+ * @param buffer Buffer to store value
+ * @param length Number of bytes to read
+ * @return Number of bytes read
+ */
+static size_t read_tlv_value(dmfsi_context_t ctx, uint32_t offset, void* buffer, uint32_t length)
+{
+    if (!ctx || !buffer || length == 0) return 0;
+    
+    uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + offset;
+    return Dmod_ReadMemory(flash_addr, buffer, length);
+}
+
+/**
+ * @brief Parse a file entry from TLV structure
+ * 
+ * @param ctx File system context
+ * @param offset Offset to FILE TLV entry in flash
+ * @param entry Pointer to store parsed file entry
+ * @return Offset to next TLV entry, or 0 on error
+ */
+static uint32_t parse_file_entry(dmfsi_context_t ctx, uint32_t offset, dmffs_file_entry_t* entry)
+{
+    if (!ctx || !entry) return 0;
+    
+    uint32_t type, length;
+    if (!read_tlv_header(ctx, offset, &type, &length)) {
+        return 0;
+    }
+    
+    if (type != DMFFS_TLV_TYPE_FILE) {
+        return 0;
+    }
+    
+    // Initialize entry
+    memset(entry, 0, sizeof(dmffs_file_entry_t));
+    entry->attr = DMFSI_ATTR_READONLY;
+    
+    // Parse nested TLVs within FILE entry
+    uint32_t nested_offset = offset + 8; // Skip FILE TLV header
+    uint32_t end_offset = offset + 8 + length;
+    
+    while (nested_offset < end_offset) {
+        uint32_t nested_type, nested_length;
+        if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
+            break;
+        }
+        
+        uint32_t value_offset = nested_offset + 8;
+        
+        switch (nested_type) {
+            case DMFFS_TLV_TYPE_NAME:
+                if (nested_length < sizeof(entry->name)) {
+                    read_tlv_value(ctx, value_offset, entry->name, nested_length);
+                    entry->name[nested_length] = '\0';
+                }
+                break;
+                
+            case DMFFS_TLV_TYPE_DATA:
+                entry->data_offset = value_offset;
+                entry->data_size = nested_length;
+                break;
+                
+            case DMFFS_TLV_TYPE_DATE:
+                if (nested_length >= sizeof(uint32_t)) {
+                    read_tlv_value(ctx, value_offset, &entry->mtime, sizeof(uint32_t));
+                    entry->ctime = entry->mtime;
+                }
+                break;
+                
+            case DMFFS_TLV_TYPE_ATTR:
+                if (nested_length >= sizeof(uint32_t)) {
+                    read_tlv_value(ctx, value_offset, &entry->attr, sizeof(uint32_t));
+                }
+                break;
+                
+            // Skip OWNER, GROUP and unknown tags
+            default:
+                break;
+        }
+        
+        nested_offset += 8 + nested_length;
+    }
+    
+    return end_offset;
+}
+
+/**
+ * @brief Check if flash contains valid TLV structure
+ * 
+ * @param ctx File system context
+ * @return true if valid TLV structure found, false otherwise
+ */
+static bool has_valid_tlv_structure(dmfsi_context_t ctx)
+{
+    if (!ctx || !ctx->flash_addr) return false;
+    
+    uint32_t type, length;
+    // Try to read first TLV header
+    if (!read_tlv_header(ctx, 0, &type, &length)) {
+        return false;
+    }
+    
+    // Check for VERSION tag at start
+    if (type == DMFFS_TLV_TYPE_VERSION) {
+        return true;
+    }
+    
+    // Or check for FILE/DIR tag
+    if (type == DMFFS_TLV_TYPE_FILE || type == DMFFS_TLV_TYPE_DIR) {
+        return true;
+    }
+    
+    return false;
 }
 
 /**
@@ -255,16 +433,129 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _deinit, (dmfsi_context_t ctx) 
  */
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fopen, (dmfsi_context_t ctx, void** fp, const char* path, int mode, int attr) )
 {
-    return DMFSI_OK;
+    if (!ctx || !fp || !path) {
+        return DMFSI_ERR_INVALID;
+    }
+    
+    // Only support read operations
+    if (mode & (DMFSI_O_WRONLY | DMFSI_O_RDWR | DMFSI_O_CREAT | DMFSI_O_TRUNC)) {
+        return DMFSI_ERR_INVALID;
+    }
+    
+    // Remove leading slash if present
+    if (path[0] == '/') {
+        path++;
+    }
+    
+    // Check for fallback data.bin file
+    if (strcmp(path, "data.bin") == 0) {
+        // Create handle for entire flash content
+        dmffs_file_handle_t* handle = Dmod_Malloc(sizeof(dmffs_file_handle_t));
+        if (!handle) {
+            return DMFSI_ERR_GENERAL;
+        }
+        
+        memset(handle, 0, sizeof(dmffs_file_handle_t));
+        strcpy(handle->entry.name, "data.bin");
+        handle->entry.data_offset = 0;
+        handle->entry.data_size = ctx->flash_size;
+        handle->entry.attr = DMFSI_ATTR_READONLY;
+        handle->position = 0;
+        handle->ctx = ctx;
+        
+        *fp = handle;
+        return DMFSI_OK;
+    }
+    
+    // Try to find file in TLV structure
+    if (!has_valid_tlv_structure(ctx)) {
+        // No valid TLV structure, only data.bin is available
+        return DMFSI_ERR_NOT_FOUND;
+    }
+    
+    // Scan for the file
+    uint32_t offset = 0;
+    
+    // Skip VERSION tag if present at start
+    uint32_t type, length;
+    if (read_tlv_header(ctx, offset, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
+        offset += 8 + length;
+    }
+    
+    // Search for file
+    while (offset < ctx->flash_size) {
+        if (!read_tlv_header(ctx, offset, &type, &length)) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_FILE) {
+            dmffs_file_entry_t entry;
+            uint32_t next_offset = parse_file_entry(ctx, offset, &entry);
+            
+            if (next_offset > 0 && strcmp(entry.name, path) == 0) {
+                // Found the file
+                dmffs_file_handle_t* handle = Dmod_Malloc(sizeof(dmffs_file_handle_t));
+                if (!handle) {
+                    return DMFSI_ERR_GENERAL;
+                }
+                
+                memcpy(&handle->entry, &entry, sizeof(dmffs_file_entry_t));
+                handle->position = 0;
+                handle->ctx = ctx;
+                
+                *fp = handle;
+                return DMFSI_OK;
+            }
+            
+            offset = next_offset;
+        } else {
+            // Skip this TLV entry
+            offset += 8 + length;
+        }
+    }
+    
+    return DMFSI_ERR_NOT_FOUND;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fclose, (dmfsi_context_t ctx, void* fp) )
 {
+    if (!ctx || !fp) {
+        return DMFSI_ERR_INVALID;
+    }
+    
+    Dmod_Free(fp);
     return DMFSI_OK;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fread, (dmfsi_context_t ctx, void* fp, void* buffer, size_t size, size_t* read) )
 {
+    if (!ctx || !fp || !buffer || !read) {
+        return DMFSI_ERR_INVALID;
+    }
+    
+    dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
+    *read = 0;
+    
+    // Check if we're at EOF
+    if (handle->position >= handle->entry.data_size) {
+        return DMFSI_OK;
+    }
+    
+    // Calculate how much we can read
+    size_t available = handle->entry.data_size - handle->position;
+    size_t to_read = (size < available) ? size : available;
+    
+    // Read from flash
+    uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + handle->entry.data_offset + handle->position;
+    size_t bytes_read = Dmod_ReadMemory(flash_addr, buffer, to_read);
+    
+    handle->position += bytes_read;
+    *read = bytes_read;
+    
     return DMFSI_OK;
 }
 
@@ -275,7 +566,40 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fwrite, (dmfsi_context_t ctx, 
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, long, _lseek, (dmfsi_context_t ctx, void* fp, long offset, int whence) )
 {
-    return -1;
+    if (!ctx || !fp) {
+        return -1;
+    }
+    
+    dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
+    long new_position = 0;
+    
+    switch (whence) {
+        case DMFSI_SEEK_SET:
+            new_position = offset;
+            break;
+            
+        case DMFSI_SEEK_CUR:
+            new_position = handle->position + offset;
+            break;
+            
+        case DMFSI_SEEK_END:
+            new_position = handle->entry.data_size + offset;
+            break;
+            
+        default:
+            return -1;
+    }
+    
+    // Validate position
+    if (new_position < 0) {
+        new_position = 0;
+    }
+    if (new_position > (long)handle->entry.data_size) {
+        new_position = handle->entry.data_size;
+    }
+    
+    handle->position = new_position;
+    return new_position;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _ioctl, (dmfsi_context_t ctx, void* fp, int request, void* arg) )
@@ -290,7 +614,25 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _sync, (dmfsi_context_t ctx, vo
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _getc, (dmfsi_context_t ctx, void* fp) )
 {
-    return -1;
+    if (!ctx || !fp) {
+        return -1;
+    }
+    
+    dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
+    
+    // Check EOF
+    if (handle->position >= handle->entry.data_size) {
+        return -1;
+    }
+    
+    uint8_t c;
+    uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + handle->entry.data_offset + handle->position;
+    if (Dmod_ReadMemory(flash_addr, &c, 1) != 1) {
+        return -1;
+    }
+    
+    handle->position++;
+    return (int)c;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _putc, (dmfsi_context_t ctx, void* fp, int c) )
@@ -300,17 +642,32 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _putc, (dmfsi_context_t ctx, vo
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, long, _tell, (dmfsi_context_t ctx, void* fp) )
 {
-    return -1;
+    if (!ctx || !fp) {
+        return -1;
+    }
+    
+    dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
+    return handle->position;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _eof, (dmfsi_context_t ctx, void* fp) )
 {
-    return -1;
+    if (!ctx || !fp) {
+        return -1;
+    }
+    
+    dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
+    return (handle->position >= handle->entry.data_size) ? 1 : 0;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, long, _size, (dmfsi_context_t ctx, void* fp) )
 {
-    return -1;
+    if (!ctx || !fp) {
+        return -1;
+    }
+    
+    dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
+    return handle->entry.data_size;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fflush, (dmfsi_context_t ctx, void* fp) )
@@ -325,18 +682,97 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _error, (dmfsi_context_t ctx, v
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx, void** dp, const char* path) )
 {
-    return DMFSI_OK;
+    if (!ctx || !dp) {
+        return DMFSI_ERR_INVALID;
+    }
+    
+    // Only support root directory
+    if (!path || path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
+        dmffs_dir_handle_t* handle = Dmod_Malloc(sizeof(dmffs_dir_handle_t));
+        if (!handle) {
+            return DMFSI_ERR_GENERAL;
+        }
+        
+        handle->ctx = ctx;
+        handle->current_offset = 0;
+        handle->entry_index = -1; // -1 means we haven't returned data.bin yet
+        
+        // Skip VERSION tag if present
+        uint32_t type, length;
+        if (read_tlv_header(ctx, 0, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
+            handle->current_offset = 8 + length;
+        }
+        
+        *dp = handle;
+        return DMFSI_OK;
+    }
+    
+    return DMFSI_ERR_NOT_FOUND;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx, void* dp, dmfsi_dir_entry_t* entry) )
 {
-    return DMFSI_OK;
+    if (!ctx || !dp || !entry) {
+        return DMFSI_ERR_INVALID;
+    }
+    
+    dmffs_dir_handle_t* handle = (dmffs_dir_handle_t*)dp;
+    
+    // If we have valid TLV structure, scan for files
+    if (has_valid_tlv_structure(ctx)) {
+        while (handle->current_offset < ctx->flash_size) {
+            uint32_t type, length;
+            if (!read_tlv_header(ctx, handle->current_offset, &type, &length)) {
+                break;
+            }
+            
+            if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+                break;
+            }
+            
+            if (type == DMFFS_TLV_TYPE_FILE) {
+                dmffs_file_entry_t file_entry;
+                uint32_t next_offset = parse_file_entry(ctx, handle->current_offset, &file_entry);
+                handle->current_offset = next_offset;
+                
+                if (next_offset > 0 && file_entry.name[0] != '\0') {
+                    // Return this file
+                    strcpy(entry->name, file_entry.name);
+                    entry->size = file_entry.data_size;
+                    entry->attr = file_entry.attr;
+                    entry->time = file_entry.mtime;
+                    handle->entry_index++;
+                    return DMFSI_OK;
+                }
+            } else {
+                // Skip this TLV
+                handle->current_offset += 8 + length;
+            }
+        }
+    }
+    
+    // No more files found, return data.bin if we haven't yet
+    if (handle->entry_index < 0) {
+        strcpy(entry->name, "data.bin");
+        entry->size = ctx->flash_size;
+        entry->attr = DMFSI_ATTR_READONLY;
+        entry->time = 0;
+        handle->entry_index = 0;
+        return DMFSI_OK;
+    }
+    
+    return DMFSI_ERR_NOT_FOUND;
 }
 
 // Close directory
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _closedir, (dmfsi_context_t ctx, void* dp) )
 {
+    if (!ctx || !dp) {
+        return DMFSI_ERR_INVALID;
+    }
+    
+    Dmod_Free(dp);
     return DMFSI_OK;
 }
 
@@ -349,11 +785,81 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _mkdir, (dmfsi_context_t ctx, c
 // Check if directory exists
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _direxists, (dmfsi_context_t ctx, const char* path) )
 {
+    if (!ctx || !path) {
+        return 0;
+    }
+    
+    // Only root directory exists
+    if (path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
+        return 1;
+    }
+    
     return 0;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _stat, (dmfsi_context_t ctx, const char* path, dmfsi_stat_t* stat) )
 {
+    if (!ctx || !path || !stat) {
+        return DMFSI_ERR_INVALID;
+    }
+    
+    // Remove leading slash
+    if (path[0] == '/') {
+        path++;
+    }
+    
+    // Check for data.bin
+    if (strcmp(path, "data.bin") == 0) {
+        stat->size = ctx->flash_size;
+        stat->attr = DMFSI_ATTR_READONLY;
+        stat->ctime = 0;
+        stat->mtime = 0;
+        stat->atime = 0;
+        return DMFSI_OK;
+    }
+    
+    // Try to find file in TLV structure
+    if (!has_valid_tlv_structure(ctx)) {
+        return DMFSI_ERR_NOT_FOUND;
+    }
+    
+    uint32_t offset = 0;
+    
+    // Skip VERSION tag if present
+    uint32_t type, length;
+    if (read_tlv_header(ctx, offset, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
+        offset += 8 + length;
+    }
+    
+    // Search for file
+    while (offset < ctx->flash_size) {
+        if (!read_tlv_header(ctx, offset, &type, &length)) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_FILE) {
+            dmffs_file_entry_t entry;
+            uint32_t next_offset = parse_file_entry(ctx, offset, &entry);
+            
+            if (next_offset > 0 && strcmp(entry.name, path) == 0) {
+                stat->size = entry.data_size;
+                stat->attr = entry.attr;
+                stat->ctime = entry.ctime;
+                stat->mtime = entry.mtime;
+                stat->atime = entry.mtime;
+                return DMFSI_OK;
+            }
+            
+            offset = next_offset;
+        } else {
+            offset += 8 + length;
+        }
+    }
+    
     return DMFSI_ERR_NOT_FOUND;
 }
 

@@ -32,6 +32,10 @@ typedef enum {
     DMFFS_TLV_TYPE_VERSION = 3,             //!< Version information
     DMFFS_TLV_TYPE_NAME    = 4,             //!< Name entry
     DMFFS_TLV_TYPE_DATA    = 5,             //!< Data entry
+    DMFFS_TLV_TYPE_DATE    = 6,             //!< Date/time entry (timestamp)
+    DMFFS_TLV_TYPE_ATTR    = 7,             //!< Attributes entry
+    DMFFS_TLV_TYPE_OWNER   = 8,             //!< Owner entry
+    DMFFS_TLV_TYPE_GROUP   = 9,             //!< Group entry
     DMFFS_TLV_TYPE_END     = 0xFFFFFFFF     //!< End of TLV entries
 } dmffs_tlv_type_t;
 
