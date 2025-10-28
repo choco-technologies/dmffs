@@ -4,7 +4,7 @@ DMOD Flash File System - A read-only file system for embedded systems.
 
 ## Description
 
-This project provides a DMOD library module for reading file systems from flash memory, and a companion application (`make_dmffs`) for creating file system images.
+This project provides a DMOD library module for reading read-only file systems from flash memory, and a companion application (`make_dmffs`) for creating file system images.
 
 ## Author
 

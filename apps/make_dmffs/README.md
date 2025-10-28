@@ -51,8 +51,8 @@ The generated binary file uses the following TLV structure:
 ## Limitations
 
 - Current implementation supports root-level files and one level of subdirectories
-- Nested subdirectories are logged but not fully processed
-- Read-only file system (no attributes like permissions are preserved)
+- Nested subdirectories (directories within subdirectories) are detected and logged with a warning but are skipped in the output
+- Read-only file system (no attributes like permissions, timestamps, or ownership are preserved)
 
 ## Building
 
