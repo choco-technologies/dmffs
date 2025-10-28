@@ -32,7 +32,7 @@ Since this is a DMF application, it needs to be run using:
 ### Example with dmod_loader
 
 ```bash
-dmod_loader make_dmffs.dmf ./flashfs ./out/flash-fs.bin
+dmod_loader make_dmffs.dmf --args "./flashfs ./out/flash-fs.bin"
 ```
 
 ## TLV Structure
@@ -50,8 +50,6 @@ The generated binary file uses the following TLV structure:
 
 ## Limitations
 
-- Current implementation supports root-level files and one level of subdirectories
-- Nested subdirectories (directories within subdirectories) are detected and logged with a warning but are skipped in the output
 - Read-only file system (no attributes like permissions, timestamps, or ownership are preserved)
 
 ## Building

@@ -44,7 +44,7 @@ A DMF application that converts a directory structure into a binary file system 
 **Example:**
 ```bash
 # Run via dmod_loader
-dmod_loader make_dmffs.dmf ./flashfs ./out/flash-fs.bin
+dmod_loader make_dmffs.dmf --args "./flashfs ./out/flash-fs.bin"
 ```
 
 ## Usage

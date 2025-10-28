@@ -2,16 +2,46 @@
 #include "dmod.h"
 #include "dmffs.h"
 #include <string.h>
-#include <stdio.h>
 
 // Maximum path length
 #define MAX_PATH_LEN 512
 
-// Buffer for building paths
-static char path_buffer[MAX_PATH_LEN];
-
 // Output file handle
 static void* output_file = NULL;
+
+/**
+ * @brief Build a path by concatenating directory and entry
+ * Simple replacement for snprintf in DMOD_MODULE mode
+ * 
+ * @param buffer Output buffer
+ * @param buffer_size Size of output buffer
+ * @param dir Directory path
+ * @param entry Entry name
+ */
+static void build_path(char* buffer, size_t buffer_size, const char* dir, const char* entry)
+{
+    size_t dir_len = strlen(dir);
+    size_t entry_len = strlen(entry);
+    
+    // Check if we have enough space (dir + "/" + entry + null)
+    if (dir_len + 1 + entry_len + 1 > buffer_size) {
+        DMOD_LOG_ERROR("Path too long: %s/%s\n", dir, entry);
+        buffer[0] = '\0';
+        return;
+    }
+    
+    // Copy directory
+    strcpy(buffer, dir);
+    
+    // Add separator if needed
+    if (dir_len > 0 && buffer[dir_len - 1] != '/') {
+        buffer[dir_len] = '/';
+        buffer[dir_len + 1] = '\0';
+    }
+    
+    // Append entry
+    strcat(buffer, entry);
+}
 
 /**
  * @brief Write a TLV header to the output file
@@ -144,6 +174,74 @@ static bool process_file(const char* filepath, const char* filename)
 static bool process_directory_contents(const char* dir_path, const char* base_path, bool write_header);
 
 /**
+ * @brief Calculate the size of a directory's TLV content (recursive)
+ * 
+ * @param dir_path Full path to the directory
+ * @return Total size in bytes, or 0 on error
+ */
+static uint32_t calculate_directory_size(const char* dir_path)
+{
+    uint32_t total_size = 0;
+    char path_buffer[MAX_PATH_LEN];
+    
+    void* dir = Dmod_OpenDir(dir_path);
+    if (!dir) {
+        return 0;
+    }
+    
+    // Get directory name
+    const char* dir_name = strrchr(dir_path, '/');
+    if (dir_name) {
+        dir_name++; // Skip the '/'
+    } else {
+        dir_name = dir_path;
+    }
+    size_t name_len = strlen(dir_name);
+    
+    // NAME TLV size
+    total_size += 8 + name_len;
+    
+    // Calculate size of all entries
+    const char* entry = NULL;
+    while ((entry = Dmod_ReadDir(dir)) != NULL) {
+        // Skip . and ..
+        if (strcmp(entry, ".") == 0 || strcmp(entry, "..") == 0) {
+            continue;
+        }
+        
+        // Build full path
+        build_path(path_buffer, sizeof(path_buffer), dir_path, entry);
+        if (path_buffer[0] == '\0') {
+            continue; // Skip if path is too long
+        }
+        
+        // Check if it's a directory
+        void* test_dir = Dmod_OpenDir(path_buffer);
+        if (test_dir) {
+            Dmod_CloseDir(test_dir);
+            // It's a directory - calculate its size recursively
+            uint32_t subdir_size = calculate_directory_size(path_buffer);
+            if (subdir_size > 0) {
+                total_size += 8 + subdir_size; // DIR TLV header + content
+            }
+        } else {
+            // It's a file - calculate FILE TLV size
+            void* test_file = Dmod_FileOpen(path_buffer, "rb");
+            if (test_file) {
+                size_t file_size = Dmod_FileSize(test_file);
+                size_t entry_name_len = strlen(entry);
+                uint32_t file_tlv_size = (8 + entry_name_len) + (8 + file_size);
+                total_size += 8 + file_tlv_size; // FILE TLV header + content
+                Dmod_FileClose(test_file);
+            }
+        }
+    }
+    
+    Dmod_CloseDir(dir);
+    return total_size;
+}
+
+/**
  * @brief Process a directory recursively and write it to the output in TLV format
  * 
  * @param dir_path Full path to the directory
@@ -155,17 +253,16 @@ static bool process_directory_contents(const char* dir_path, const char* base_pa
 {
     DMOD_LOG_INFO("Processing directory: %s (write_header: %d)\n", dir_path, write_header);
     
+    char path_buffer[MAX_PATH_LEN];
+    
     void* dir = Dmod_OpenDir(dir_path);
     if (!dir) {
         DMOD_LOG_ERROR("Failed to open directory: %s\n", dir_path);
         return false;
     }
     
-    // For subdirectories, we need to calculate the size first
-    // We'll do a two-pass approach: first count, then write
+    // For subdirectories, calculate size and write header
     if (write_header) {
-        // First pass: calculate the total size
-        uint32_t dir_content_size = 0;
         const char* dir_name = strrchr(dir_path, '/');
         if (dir_name) {
             dir_name++; // Skip the '/'
@@ -174,41 +271,14 @@ static bool process_directory_contents(const char* dir_path, const char* base_pa
         }
         size_t name_len = strlen(dir_name);
         
-        // NAME TLV size
-        dir_content_size += 8 + name_len;
-        
-        // Count files and subdirectories
-        const char* entry = NULL;
-        while ((entry = Dmod_ReadDir(dir)) != NULL) {
-            // Skip . and ..
-            if (strcmp(entry, ".") == 0 || strcmp(entry, "..") == 0) {
-                continue;
-            }
-            
-            // Build full path
-            snprintf(path_buffer, sizeof(path_buffer), "%s/%s", dir_path, entry);
-            
-            // Check if it's a directory by trying to open it as a directory
-            void* test_dir = Dmod_OpenDir(path_buffer);
-            if (test_dir) {
-                // It's a directory - we need to recursively calculate its size
-                // For now, we'll use a simplified approach and process without nested DIRs
-                Dmod_CloseDir(test_dir);
-                DMOD_LOG_WARN("Nested directories not fully supported yet, skipping: %s\n", path_buffer);
-            } else {
-                // It's a file - calculate FILE TLV size
-                void* test_file = Dmod_FileOpen(path_buffer, "rb");
-                if (test_file) {
-                    size_t file_size = Dmod_FileSize(test_file);
-                    size_t entry_name_len = strlen(entry);
-                    uint32_t file_tlv_size = (8 + entry_name_len) + (8 + file_size);
-                    dir_content_size += 8 + file_tlv_size; // FILE TLV header + content
-                    Dmod_FileClose(test_file);
-                }
-            }
-        }
-        
+        // Calculate total directory content size
         Dmod_CloseDir(dir);
+        uint32_t dir_content_size = calculate_directory_size(dir_path);
+        
+        if (dir_content_size == 0) {
+            DMOD_LOG_ERROR("Failed to calculate directory size: %s\n", dir_path);
+            return false;
+        }
         
         // Write DIR TLV header
         if (!write_tlv_header(DMFFS_TLV_TYPE_DIR, dir_content_size)) {
@@ -220,7 +290,7 @@ static bool process_directory_contents(const char* dir_path, const char* base_pa
             return false;
         }
         
-        // Reopen directory for second pass
+        // Reopen directory for processing
         dir = Dmod_OpenDir(dir_path);
         if (!dir) {
             DMOD_LOG_ERROR("Failed to reopen directory: %s\n", dir_path);
@@ -237,22 +307,19 @@ static bool process_directory_contents(const char* dir_path, const char* base_pa
         }
         
         // Build full path
-        snprintf(path_buffer, sizeof(path_buffer), "%s/%s", dir_path, entry);
+        build_path(path_buffer, sizeof(path_buffer), dir_path, entry);
+        if (path_buffer[0] == '\0') {
+            continue; // Skip if path is too long
+        }
         
         // Check if it's a directory
         void* test_dir = Dmod_OpenDir(path_buffer);
         if (test_dir) {
             Dmod_CloseDir(test_dir);
-            // It's a subdirectory - process recursively
-            if (!write_header) {
-                // Root level - write subdirectories with headers
-                if (!process_directory_contents(path_buffer, base_path, true)) {
-                    Dmod_CloseDir(dir);
-                    return false;
-                }
-            } else {
-                // Skip nested directories for now
-                DMOD_LOG_WARN("Skipping nested directory: %s\n", path_buffer);
+            // It's a subdirectory - process recursively with header
+            if (!process_directory_contents(path_buffer, base_path, true)) {
+                Dmod_CloseDir(dir);
+                return false;
             }
         } else {
             // It's a file
@@ -276,20 +343,22 @@ static bool process_directory_contents(const char* dir_path, const char* base_pa
  * @param argv Argument values
  * @return 0 on success, non-zero on error
  */
-int dmod_main(int argc, const char* argv[])
+int main(int argc, const char* argv[])
 {
     DMOD_LOG_INFO("make_dmffs - DMFFS Binary Generator\n");
     DMOD_LOG_INFO("Version 0.1\n\n");
     
     // Check arguments
-    if (argc != 3) {
+    // When run via dmod_loader with --args, argc doesn't include program name
+    // So we expect argc=2 (input_dir, output_file)
+    if (argc != 2) {
         DMOD_LOG_ERROR("Usage: make_dmffs <input_directory> <output_file>\n");
         DMOD_LOG_ERROR("Example: make_dmffs ./flashfs ./out/flash-fs.bin\n");
         return 1;
     }
     
-    const char* input_dir = argv[1];
-    const char* output_path = argv[2];
+    const char* input_dir = argv[0];
+    const char* output_path = argv[1];
     
     DMOD_LOG_INFO("Input directory: %s\n", input_dir);
     DMOD_LOG_INFO("Output file: %s\n", output_path);
