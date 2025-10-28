@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/CMakeFiles/dmod-populate"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/CMakeFiles/dmod-populate.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/CMakeFiles/dmod-populate-complete.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/dmod-populate-prefix/src/dmod-populate-stamp/dmod-populate-build.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/dmod-populate-prefix/src/dmod-populate-stamp/dmod-populate-configure.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/dmod-populate-prefix/src/dmod-populate-stamp/dmod-populate-download.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/dmod-populate-prefix/src/dmod-populate-stamp/dmod-populate-install.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/dmod-populate-prefix/src/dmod-populate-stamp/dmod-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/dmod-populate-prefix/src/dmod-populate-stamp/dmod-populate-patch.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/dmod-populate-prefix/src/dmod-populate-stamp/dmod-populate-test.rule"
+		},
+		{
+			"file" : "/home/runner/work/dmffs/dmffs/_codeql_build_dir/_deps/dmod-subbuild/dmod-populate-prefix/src/dmod-populate-stamp/dmod-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"dmod-populate"
+		],
+		"name" : "dmod-populate"
+	}
+}

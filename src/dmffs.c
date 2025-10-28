@@ -232,6 +232,9 @@ static uint32_t parse_file_entry(dmfsi_context_t ctx, uint32_t offset, dmffs_fil
                     // Truncate to fit
                     read_tlv_value(ctx, value_offset, entry->name, sizeof(entry->name) - 1);
                     entry->name[sizeof(entry->name) - 1] = '\0';
+                } else {
+                    // Zero-length name
+                    entry->name[0] = '\0';
                 }
                 break;
                 
