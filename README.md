@@ -34,7 +34,7 @@ DMFFS is part of a modular embedded file system architecture built on DMOD:
 │  • Unified file system interface                             │
 │  • Multiple mount points                                     │
 │  • Path resolution                                           │
-│  https://github.com/choco-technologies/dmvfs               │
+│  https://github.com/choco-technologies/dmvfs                │
 └─────────────────────────────────────────────────────────────┘
                            │
                            ▼
@@ -42,7 +42,7 @@ DMFFS is part of a modular embedded file system architecture built on DMOD:
 │          DMFSI (DMOD File System Interface)                  │
 │  • Standardized POSIX-like API                               │
 │  • Common interface for all file systems                     │
-│  https://github.com/choco-technologies/dmfsi               │
+│  https://github.com/choco-technologies/dmfsi                │
 └─────────────────────────────────────────────────────────────┘
                            │
          ┌─────────────────┼─────────────────┐
