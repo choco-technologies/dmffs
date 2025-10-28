@@ -157,11 +157,6 @@ static bool read_tlv_header(dmfsi_context_t ctx, uint32_t offset, uint32_t* type
 {
     if (!ctx || !type || !length) return false;
     
-    // Check if we can read the header (8 bytes)
-    if (offset + 8 > ctx->flash_size) {
-        return false;
-    }
-    
     uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + offset;
     
     // Read type (4 bytes)
