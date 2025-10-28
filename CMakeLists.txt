@@ -83,3 +83,15 @@ target_include_directories(${DMOD_MODULE_NAME} PRIVATE
 
 # Link to DMFSI interface
 target_link_libraries(${DMOD_MODULE_NAME} dmfsi_if)
+
+# ======================================================================
+#               make_dmffs Application
+# ======================================================================
+# Add make_dmffs application
+dmod_add_executable(make_dmffs "0.1"
+    apps/make_dmffs/make_dmffs.c
+)
+
+target_include_directories(make_dmffs PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
