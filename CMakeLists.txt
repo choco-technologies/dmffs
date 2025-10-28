@@ -1,4 +1,16 @@
+# =====================================================================
+#               DMOD Flash File System Module
+# =====================================================================
 cmake_minimum_required(VERSION 3.18)
+
+
+# ======================================================================
+#               DMOD FFS
+# ======================================================================
+project(dmffs 
+    VERSION 1.0
+    DESCRIPTION "DMOD Flash File System"
+    LANGUAGES C CXX)
 
 # DMOD_DIR must be set (either via command line or environment variable)
 if(NOT DEFINED DMOD_DIR)
@@ -12,8 +24,6 @@ set(DMOD_MODE "DMOD_MODULE" CACHE STRING "Mode" FORCE)
 set(DMOD_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 
 include(${DMOD_DIR}/paths.cmake)
-
-project(dmffs_module)
 
 dmod_setup_external_module()
 
