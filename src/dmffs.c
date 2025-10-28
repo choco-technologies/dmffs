@@ -49,6 +49,9 @@ typedef struct {
     dmfsi_context_t ctx;        //!< file system context
     uint32_t current_offset;    //!< current offset in flash for scanning
     int entry_index;            //!< current entry index
+    char path[256];             //!< current directory path
+    bool in_dir;                //!< true if currently inside a DIR entry
+    uint32_t dir_end_offset;    //!< end offset of current DIR
 } dmffs_dir_handle_t;
 
 /**
@@ -268,6 +271,142 @@ static uint32_t parse_file_entry(dmfsi_context_t ctx, uint32_t offset, dmffs_fil
 }
 
 /**
+ * @brief Search for a file by path, supporting directories
+ * 
+ * @param ctx File system context
+ * @param path Full path to search for (e.g., "dir/file.txt" or "file.txt")
+ * @param entry Pointer to store found file entry
+ * @return true if file found, false otherwise
+ */
+static bool find_file_by_path(dmfsi_context_t ctx, const char* path, dmffs_file_entry_t* entry)
+{
+    if (!ctx || !path || !entry) return false;
+    
+    // Parse the path to get directory components
+    char path_copy[256];
+    strncpy(path_copy, path, sizeof(path_copy) - 1);
+    path_copy[sizeof(path_copy) - 1] = '\0';
+    
+    // Split path into directory and filename
+    char* last_slash = strrchr(path_copy, '/');
+    const char* filename = last_slash ? last_slash + 1 : path_copy;
+    
+    // Start scanning from beginning
+    uint32_t offset = 0;
+    
+    // Skip VERSION tag if present
+    uint32_t type, length;
+    if (read_tlv_header(ctx, offset, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
+        offset += 8 + length;
+    }
+    
+    // If we have a directory path, we need to navigate into directories
+    if (last_slash) {
+        *last_slash = '\0'; // Terminate directory path
+        char* dir_name = path_copy;
+        
+        // Navigate through directory structure
+        while (offset < ctx->flash_size) {
+            if (!read_tlv_header(ctx, offset, &type, &length)) {
+                break;
+            }
+            
+            if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+                break;
+            }
+            
+            if (type == DMFFS_TLV_TYPE_DIR) {
+                // Parse DIR name
+                uint32_t nested_offset = offset + 8;
+                uint32_t end_offset = offset + 8 + length;
+                char dir_entry_name[256] = {0};
+                bool name_found = false;
+                
+                // First pass: get directory name
+                while (nested_offset < end_offset) {
+                    uint32_t nested_type, nested_length;
+                    if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
+                        break;
+                    }
+                    
+                    if (nested_type == DMFFS_TLV_TYPE_NAME && nested_length > 0) {
+                        uint32_t value_offset = nested_offset + 8;
+                        if (nested_length <= sizeof(dir_entry_name) - 1) {
+                            read_tlv_value(ctx, value_offset, dir_entry_name, nested_length);
+                            dir_entry_name[nested_length] = '\0';
+                        }
+                        name_found = true;
+                        break;
+                    }
+                    
+                    nested_offset += 8 + nested_length;
+                }
+                
+                // Check if this is the directory we're looking for
+                if (name_found && strcmp(dir_entry_name, dir_name) == 0) {
+                    // Found the directory, search for file inside
+                    nested_offset = offset + 8;
+                    
+                    while (nested_offset < end_offset) {
+                        uint32_t nested_type, nested_length;
+                        if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
+                            break;
+                        }
+                        
+                        if (nested_type == DMFFS_TLV_TYPE_FILE) {
+                            dmffs_file_entry_t file_entry;
+                            uint32_t next_offset = parse_file_entry(ctx, nested_offset, &file_entry);
+                            
+                            if (next_offset > 0 && strcmp(file_entry.name, filename) == 0) {
+                                memcpy(entry, &file_entry, sizeof(dmffs_file_entry_t));
+                                return true;
+                            }
+                            
+                            nested_offset = next_offset;
+                        } else {
+                            nested_offset += 8 + nested_length;
+                        }
+                    }
+                    
+                    return false; // Directory found but file not in it
+                }
+                
+                offset += 8 + length;
+            } else {
+                offset += 8 + length;
+            }
+        }
+        
+        return false; // Directory not found
+    }
+    
+    // No directory in path, search root level
+    while (offset < ctx->flash_size) {
+        if (!read_tlv_header(ctx, offset, &type, &length)) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_FILE) {
+            uint32_t next_offset = parse_file_entry(ctx, offset, entry);
+            
+            if (next_offset > 0 && strcmp(entry->name, filename) == 0) {
+                return true;
+            }
+            
+            offset = next_offset;
+        } else {
+            offset += 8 + length;
+        }
+    }
+    
+    return false;
+}
+
+/**
  * @brief Check if flash contains valid TLV structure
  * 
  * @param ctx File system context
@@ -454,76 +593,46 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fopen, (dmfsi_context_t ctx, v
         path++;
     }
     
-    // Check for fallback data.bin file
-    if (strcmp(path, "data.bin") == 0) {
-        // Create handle for entire flash content
+    // Try to find file in TLV structure
+    if (!has_valid_tlv_structure(ctx)) {
+        // No valid TLV structure - check if requesting data.bin fallback
+        if (strcmp(path, "data.bin") == 0) {
+            // Create handle for entire flash content
+            dmffs_file_handle_t* handle = Dmod_Malloc(sizeof(dmffs_file_handle_t));
+            if (!handle) {
+                return DMFSI_ERR_GENERAL;
+            }
+            
+            memset(handle, 0, sizeof(dmffs_file_handle_t));
+            strncpy(handle->entry.name, "data.bin", sizeof(handle->entry.name) - 1);
+            handle->entry.name[sizeof(handle->entry.name) - 1] = '\0';
+            handle->entry.data_offset = 0;
+            handle->entry.data_size = ctx->flash_size;
+            handle->entry.attr = DMFSI_ATTR_READONLY;
+            handle->position = 0;
+            handle->ctx = ctx;
+            
+            *fp = handle;
+            return DMFSI_OK;
+        }
+        return DMFSI_ERR_NOT_FOUND;
+    }
+    
+    // Search for file using path (supports directories)
+    dmffs_file_entry_t entry;
+    if (find_file_by_path(ctx, path, &entry)) {
+        // Found the file
         dmffs_file_handle_t* handle = Dmod_Malloc(sizeof(dmffs_file_handle_t));
         if (!handle) {
             return DMFSI_ERR_GENERAL;
         }
         
-        memset(handle, 0, sizeof(dmffs_file_handle_t));
-        strncpy(handle->entry.name, "data.bin", sizeof(handle->entry.name) - 1);
-        handle->entry.name[sizeof(handle->entry.name) - 1] = '\0';
-        handle->entry.data_offset = 0;
-        handle->entry.data_size = ctx->flash_size;
-        handle->entry.attr = DMFSI_ATTR_READONLY;
+        memcpy(&handle->entry, &entry, sizeof(dmffs_file_entry_t));
         handle->position = 0;
         handle->ctx = ctx;
         
         *fp = handle;
         return DMFSI_OK;
-    }
-    
-    // Try to find file in TLV structure
-    if (!has_valid_tlv_structure(ctx)) {
-        // No valid TLV structure, only data.bin is available
-        return DMFSI_ERR_NOT_FOUND;
-    }
-    
-    // Scan for the file
-    uint32_t offset = 0;
-    
-    // Skip VERSION tag if present at start
-    uint32_t type, length;
-    if (read_tlv_header(ctx, offset, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
-        offset += 8 + length;
-    }
-    
-    // Search for file
-    while (offset < ctx->flash_size) {
-        if (!read_tlv_header(ctx, offset, &type, &length)) {
-            break;
-        }
-        
-        if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
-            break;
-        }
-        
-        if (type == DMFFS_TLV_TYPE_FILE) {
-            dmffs_file_entry_t entry;
-            uint32_t next_offset = parse_file_entry(ctx, offset, &entry);
-            
-            if (next_offset > 0 && strcmp(entry.name, path) == 0) {
-                // Found the file
-                dmffs_file_handle_t* handle = Dmod_Malloc(sizeof(dmffs_file_handle_t));
-                if (!handle) {
-                    return DMFSI_ERR_GENERAL;
-                }
-                
-                memcpy(&handle->entry, &entry, sizeof(dmffs_file_entry_t));
-                handle->position = 0;
-                handle->ctx = ctx;
-                
-                *fp = handle;
-                return DMFSI_OK;
-            }
-            
-            offset = next_offset;
-        } else {
-            // Skip this TLV entry
-            offset += 8 + length;
-        }
     }
     
     return DMFSI_ERR_NOT_FOUND;
@@ -702,28 +811,106 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx,
         return DMFSI_ERR_INVALID;
     }
     
-    // Only support root directory
-    if (!path || path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
-        dmffs_dir_handle_t* handle = Dmod_Malloc(sizeof(dmffs_dir_handle_t));
-        if (!handle) {
-            return DMFSI_ERR_GENERAL;
-        }
-        
-        handle->ctx = ctx;
-        handle->current_offset = 0;
-        handle->entry_index = -1; // -1 means we haven't returned data.bin yet
-        
-        // Skip VERSION tag if present
-        uint32_t type, length;
-        if (read_tlv_header(ctx, 0, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
-            handle->current_offset = 8 + length;
-        }
-        
-        *dp = handle;
-        return DMFSI_OK;
+    dmffs_dir_handle_t* handle = Dmod_Malloc(sizeof(dmffs_dir_handle_t));
+    if (!handle) {
+        return DMFSI_ERR_GENERAL;
     }
     
-    return DMFSI_ERR_NOT_FOUND;
+    memset(handle, 0, sizeof(dmffs_dir_handle_t));
+    handle->ctx = ctx;
+    handle->entry_index = 0;
+    handle->in_dir = false;
+    
+    // Normalize path
+    if (!path || path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
+        // Root directory
+        handle->path[0] = '\0';
+    } else {
+        // Copy and normalize path
+        strncpy(handle->path, path, sizeof(handle->path) - 1);
+        handle->path[sizeof(handle->path) - 1] = '\0';
+        
+        // Remove leading slash
+        if (handle->path[0] == '/') {
+            memmove(handle->path, handle->path + 1, strlen(handle->path));
+        }
+    }
+    
+    // Check if we have valid TLV structure
+    if (!has_valid_tlv_structure(ctx)) {
+        // Invalid structure - for root only, we'll return data.bin
+        if (handle->path[0] == '\0') {
+            handle->entry_index = -1; // Special marker for data.bin
+            *dp = handle;
+            return DMFSI_OK;
+        }
+        Dmod_Free(handle);
+        return DMFSI_ERR_NOT_FOUND;
+    }
+    
+    // Skip VERSION tag if present
+    uint32_t type, length;
+    if (read_tlv_header(ctx, 0, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
+        handle->current_offset = 8 + length;
+    }
+    
+    // If opening a subdirectory, find it first
+    if (handle->path[0] != '\0') {
+        uint32_t offset = handle->current_offset;
+        
+        while (offset < ctx->flash_size) {
+            if (!read_tlv_header(ctx, offset, &type, &length)) {
+                break;
+            }
+            
+            if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+                break;
+            }
+            
+            if (type == DMFFS_TLV_TYPE_DIR) {
+                // Check if this is the directory we want
+                uint32_t nested_offset = offset + 8;
+                uint32_t end_offset = offset + 8 + length;
+                char dir_name[256] = {0};
+                
+                while (nested_offset < end_offset) {
+                    uint32_t nested_type, nested_length;
+                    if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
+                        break;
+                    }
+                    
+                    if (nested_type == DMFFS_TLV_TYPE_NAME && nested_length > 0) {
+                        uint32_t value_offset = nested_offset + 8;
+                        if (nested_length <= sizeof(dir_name) - 1) {
+                            read_tlv_value(ctx, value_offset, dir_name, nested_length);
+                            dir_name[nested_length] = '\0';
+                        }
+                        break;
+                    }
+                    
+                    nested_offset += 8 + nested_length;
+                }
+                
+                if (strcmp(dir_name, handle->path) == 0) {
+                    // Found the directory
+                    handle->current_offset = offset + 8; // Start of DIR contents
+                    handle->dir_end_offset = offset + 8 + length;
+                    handle->in_dir = true;
+                    *dp = handle;
+                    return DMFSI_OK;
+                }
+            }
+            
+            offset += 8 + length;
+        }
+        
+        // Directory not found
+        Dmod_Free(handle);
+        return DMFSI_ERR_NOT_FOUND;
+    }
+    
+    *dp = handle;
+    return DMFSI_OK;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx, void* dp, dmfsi_dir_entry_t* entry) )
@@ -734,41 +921,7 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
     
     dmffs_dir_handle_t* handle = (dmffs_dir_handle_t*)dp;
     
-    // If we have valid TLV structure, scan for files
-    if (has_valid_tlv_structure(ctx)) {
-        while (handle->current_offset < ctx->flash_size) {
-            uint32_t type, length;
-            if (!read_tlv_header(ctx, handle->current_offset, &type, &length)) {
-                break;
-            }
-            
-            if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
-                break;
-            }
-            
-            if (type == DMFFS_TLV_TYPE_FILE) {
-                dmffs_file_entry_t file_entry;
-                uint32_t next_offset = parse_file_entry(ctx, handle->current_offset, &file_entry);
-                handle->current_offset = next_offset;
-                
-                if (next_offset > 0 && file_entry.name[0] != '\0') {
-                    // Return this file
-                    strncpy(entry->name, file_entry.name, sizeof(entry->name) - 1);
-                    entry->name[sizeof(entry->name) - 1] = '\0';
-                    entry->size = file_entry.data_size;
-                    entry->attr = file_entry.attr;
-                    entry->time = file_entry.mtime;
-                    handle->entry_index++;
-                    return DMFSI_OK;
-                }
-            } else {
-                // Skip this TLV
-                handle->current_offset += 8 + length;
-            }
-        }
-    }
-    
-    // No more files found, return data.bin if we haven't yet
+    // Special case: no valid TLV structure, return data.bin for root
     if (handle->entry_index < 0) {
         strncpy(entry->name, "data.bin", sizeof(entry->name) - 1);
         entry->name[sizeof(entry->name) - 1] = '\0';
@@ -777,6 +930,84 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
         entry->time = 0;
         handle->entry_index = 0;
         return DMFSI_OK;
+    }
+    
+    // If we're inside a directory, only scan within that directory
+    uint32_t end_offset = handle->in_dir ? handle->dir_end_offset : ctx->flash_size;
+    
+    while (handle->current_offset < end_offset) {
+        uint32_t type, length;
+        if (!read_tlv_header(ctx, handle->current_offset, &type, &length)) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_FILE) {
+            dmffs_file_entry_t file_entry;
+            uint32_t next_offset = parse_file_entry(ctx, handle->current_offset, &file_entry);
+            handle->current_offset = next_offset;
+            
+            if (next_offset > 0 && file_entry.name[0] != '\0') {
+                // Return this file
+                strncpy(entry->name, file_entry.name, sizeof(entry->name) - 1);
+                entry->name[sizeof(entry->name) - 1] = '\0';
+                entry->size = file_entry.data_size;
+                entry->attr = file_entry.attr;
+                entry->time = file_entry.mtime;
+                handle->entry_index++;
+                return DMFSI_OK;
+            }
+        } else if (type == DMFFS_TLV_TYPE_DIR && !handle->in_dir) {
+            // At root level, list directories
+            uint32_t nested_offset = handle->current_offset + 8;
+            uint32_t dir_end = handle->current_offset + 8 + length;
+            char dir_name[256] = {0};
+            uint32_t dir_attr = DMFSI_ATTR_DIRECTORY | DMFSI_ATTR_READONLY;
+            uint32_t dir_time = 0;
+            
+            // Parse DIR metadata
+            while (nested_offset < dir_end) {
+                uint32_t nested_type, nested_length;
+                if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
+                    break;
+                }
+                
+                uint32_t value_offset = nested_offset + 8;
+                
+                if (nested_type == DMFFS_TLV_TYPE_NAME && nested_length > 0) {
+                    if (nested_length <= sizeof(dir_name) - 1) {
+                        read_tlv_value(ctx, value_offset, dir_name, nested_length);
+                        dir_name[nested_length] = '\0';
+                    }
+                } else if (nested_type == DMFFS_TLV_TYPE_ATTR && nested_length >= sizeof(uint32_t)) {
+                    read_tlv_value(ctx, value_offset, &dir_attr, sizeof(uint32_t));
+                    dir_attr |= DMFSI_ATTR_DIRECTORY; // Ensure directory flag
+                } else if (nested_type == DMFFS_TLV_TYPE_DATE && nested_length >= sizeof(uint32_t)) {
+                    read_tlv_value(ctx, value_offset, &dir_time, sizeof(uint32_t));
+                }
+                
+                nested_offset += 8 + nested_length;
+            }
+            
+            handle->current_offset += 8 + length;
+            
+            if (dir_name[0] != '\0') {
+                // Return this directory
+                strncpy(entry->name, dir_name, sizeof(entry->name) - 1);
+                entry->name[sizeof(entry->name) - 1] = '\0';
+                entry->size = 0;
+                entry->attr = dir_attr;
+                entry->time = dir_time;
+                handle->entry_index++;
+                return DMFSI_OK;
+            }
+        } else {
+            // Skip this TLV
+            handle->current_offset += 8 + length;
+        }
     }
     
     return DMFSI_ERR_NOT_FOUND;
@@ -807,9 +1038,70 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _direxists, (dmfsi_context_t ct
         return 0;
     }
     
-    // Only root directory exists
+    // Root directory always exists
     if (path[0] == '\0' || (path[0] == '/' && path[1] == '\0')) {
         return 1;
+    }
+    
+    // Check if valid TLV structure exists
+    if (!has_valid_tlv_structure(ctx)) {
+        return 0;
+    }
+    
+    // Remove leading slash
+    const char* dir_path = path;
+    if (dir_path[0] == '/') {
+        dir_path++;
+    }
+    
+    // Search for directory
+    uint32_t offset = 0;
+    uint32_t type, length;
+    
+    // Skip VERSION tag if present
+    if (read_tlv_header(ctx, offset, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
+        offset += 8 + length;
+    }
+    
+    while (offset < ctx->flash_size) {
+        if (!read_tlv_header(ctx, offset, &type, &length)) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
+            break;
+        }
+        
+        if (type == DMFFS_TLV_TYPE_DIR) {
+            // Check if this is the directory we're looking for
+            uint32_t nested_offset = offset + 8;
+            uint32_t end_offset = offset + 8 + length;
+            char dir_name[256] = {0};
+            
+            while (nested_offset < end_offset) {
+                uint32_t nested_type, nested_length;
+                if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
+                    break;
+                }
+                
+                if (nested_type == DMFFS_TLV_TYPE_NAME && nested_length > 0) {
+                    uint32_t value_offset = nested_offset + 8;
+                    if (nested_length <= sizeof(dir_name) - 1) {
+                        read_tlv_value(ctx, value_offset, dir_name, nested_length);
+                        dir_name[nested_length] = '\0';
+                    }
+                    break;
+                }
+                
+                nested_offset += 8 + nested_length;
+            }
+            
+            if (strcmp(dir_name, dir_path) == 0) {
+                return 1; // Directory found
+            }
+        }
+        
+        offset += 8 + length;
     }
     
     return 0;
@@ -826,30 +1118,40 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _stat, (dmfsi_context_t ctx, co
         path++;
     }
     
-    // Check for data.bin
-    if (strcmp(path, "data.bin") == 0) {
-        stat->size = ctx->flash_size;
-        stat->attr = DMFSI_ATTR_READONLY;
-        stat->ctime = 0;
-        stat->mtime = 0;
-        stat->atime = 0;
-        return DMFSI_OK;
-    }
-    
-    // Try to find file in TLV structure
+    // Check if we have valid TLV structure
     if (!has_valid_tlv_structure(ctx)) {
+        // Only data.bin is available
+        if (strcmp(path, "data.bin") == 0) {
+            stat->size = ctx->flash_size;
+            stat->attr = DMFSI_ATTR_READONLY;
+            stat->ctime = 0;
+            stat->mtime = 0;
+            stat->atime = 0;
+            return DMFSI_OK;
+        }
         return DMFSI_ERR_NOT_FOUND;
     }
     
+    // Try to find file using path (supports directories)
+    dmffs_file_entry_t entry;
+    if (find_file_by_path(ctx, path, &entry)) {
+        stat->size = entry.data_size;
+        stat->attr = entry.attr;
+        stat->ctime = entry.ctime;
+        stat->mtime = entry.mtime;
+        stat->atime = entry.mtime;
+        return DMFSI_OK;
+    }
+    
+    // Check if it's a directory
     uint32_t offset = 0;
+    uint32_t type, length;
     
     // Skip VERSION tag if present
-    uint32_t type, length;
     if (read_tlv_header(ctx, offset, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
         offset += 8 + length;
     }
     
-    // Search for file
     while (offset < ctx->flash_size) {
         if (!read_tlv_header(ctx, offset, &type, &length)) {
             break;
@@ -859,23 +1161,48 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _stat, (dmfsi_context_t ctx, co
             break;
         }
         
-        if (type == DMFFS_TLV_TYPE_FILE) {
-            dmffs_file_entry_t entry;
-            uint32_t next_offset = parse_file_entry(ctx, offset, &entry);
+        if (type == DMFFS_TLV_TYPE_DIR) {
+            // Check if this is the directory we're looking for
+            uint32_t nested_offset = offset + 8;
+            uint32_t end_offset = offset + 8 + length;
+            char dir_name[256] = {0};
+            uint32_t dir_attr = DMFSI_ATTR_DIRECTORY | DMFSI_ATTR_READONLY;
+            uint32_t dir_time = 0;
             
-            if (next_offset > 0 && strcmp(entry.name, path) == 0) {
-                stat->size = entry.data_size;
-                stat->attr = entry.attr;
-                stat->ctime = entry.ctime;
-                stat->mtime = entry.mtime;
-                stat->atime = entry.mtime;
-                return DMFSI_OK;
+            while (nested_offset < end_offset) {
+                uint32_t nested_type, nested_length;
+                if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
+                    break;
+                }
+                
+                uint32_t value_offset = nested_offset + 8;
+                
+                if (nested_type == DMFFS_TLV_TYPE_NAME && nested_length > 0) {
+                    if (nested_length <= sizeof(dir_name) - 1) {
+                        read_tlv_value(ctx, value_offset, dir_name, nested_length);
+                        dir_name[nested_length] = '\0';
+                    }
+                } else if (nested_type == DMFFS_TLV_TYPE_ATTR && nested_length >= sizeof(uint32_t)) {
+                    read_tlv_value(ctx, value_offset, &dir_attr, sizeof(uint32_t));
+                    dir_attr |= DMFSI_ATTR_DIRECTORY;
+                } else if (nested_type == DMFFS_TLV_TYPE_DATE && nested_length >= sizeof(uint32_t)) {
+                    read_tlv_value(ctx, value_offset, &dir_time, sizeof(uint32_t));
+                }
+                
+                nested_offset += 8 + nested_length;
             }
             
-            offset = next_offset;
-        } else {
-            offset += 8 + length;
+            if (strcmp(dir_name, path) == 0) {
+                stat->size = 0;
+                stat->attr = dir_attr;
+                stat->ctime = dir_time;
+                stat->mtime = dir_time;
+                stat->atime = dir_time;
+                return DMFSI_OK;
+            }
         }
+        
+        offset += 8 + length;
     }
     
     return DMFSI_ERR_NOT_FOUND;
