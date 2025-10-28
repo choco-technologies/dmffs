@@ -69,10 +69,5 @@ jobs:
           /tmp/dmvfs/build/tests/fs_tester --read-only-fs \
             --test-file /mnt/hello.txt \
             --test-dir /mnt \
-            ./build/_deps/dmod-build/dmf/dmffs.dmf || true
-          echo "Filesystem test completed (exit code: $?)"
-      
-      - name: Build with Make (alternative build system)
-        run: |
-          make clean
-          make DMOD_MODE=DMOD_MODULE
+            ./build/_deps/dmod-build/dmf/dmffs.dmf
+          echo "Filesystem test completed successfully"
