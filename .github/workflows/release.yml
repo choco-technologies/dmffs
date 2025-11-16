@@ -78,7 +78,8 @@ jobs:
           cmake --build .
           
           echo "Build completed for ${{ matrix.arch_name }}"
-          ls -la _deps/dmf/
+          ls -la dmf/
+          ls -la dmfc/
       
       - name: Prepare release package
         run: |
