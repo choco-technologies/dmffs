@@ -7,8 +7,13 @@ cmake_minimum_required(VERSION 3.18)
 # ======================================================================
 #               DMOD FFS
 # ======================================================================
+# Allow version to be passed as a parameter, default to 0.1
+if(NOT DEFINED DMOD_MODULE_VERSION)
+    set(DMOD_MODULE_VERSION "0.1" CACHE STRING "DMOD module version")
+endif()
+
 project(dmffs 
-    VERSION 1.0
+    VERSION ${DMOD_MODULE_VERSION}
     DESCRIPTION "DMOD Flash File System"
     LANGUAGES C CXX)
 
@@ -57,8 +62,8 @@ FetchContent_MakeAvailable(dmfsi)
 # Name of the module 
 set(DMOD_MODULE_NAME        dmffs)
 
-# Version (should be string in format "Major.Minor") 
-set(DMOD_MODULE_VERSION     "0.1")
+# Version is already set above and used in project()
+# No need to set it again here
 
 # Author (should be string)
 set(DMOD_AUTHOR_NAME        Patryk Kubiak)
@@ -72,7 +77,7 @@ set(DMOD_STACK_SIZE         1024)
 #   and can be used in the same way after the creation
 #   (for example, to link libraries)
 #
-dmod_add_library(${DMOD_MODULE_NAME} "0.1"
+dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     # List of source files - can include C and C++ files
     src/dmffs.c
 )
@@ -88,7 +93,7 @@ target_link_libraries(${DMOD_MODULE_NAME} dmfsi_if)
 #               make_dmffs Application
 # ======================================================================
 # Add make_dmffs application
-dmod_add_executable(make_dmffs "0.1"
+dmod_add_executable(make_dmffs ${DMOD_MODULE_VERSION}
     apps/make_dmffs/make_dmffs.c
 )
 

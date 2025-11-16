@@ -17,8 +17,8 @@ include $(DMOD_DIR)/paths.mk
 # The name of the module
 DMOD_MODULE_NAME=dmffs
 
-# The version of the module
-DMOD_MODULE_VERSION=0.1
+# The version of the module (can be overridden via command line or environment)
+DMOD_MODULE_VERSION?=0.1
 
 # The name of the author
 DMOD_AUTHOR_NAME=Patryk Kubiak
