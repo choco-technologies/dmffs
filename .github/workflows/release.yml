@@ -72,31 +72,31 @@ jobs:
           cd build_$ARCH_DIR_NAME
           
           # First run cmake to fetch dependencies with version from tag
-          cmake .. -DDMOD_TOOLS_NAME=${{ matrix.arch_name }} -DDMOD_MODULE_VERSION="${{ steps.get_version.outputs.version }}"
+          cmake .. -DDMOD_TOOLS_NAME=arch/${{ matrix.arch_name }} -DDMOD_MODULE_VERSION="${{ steps.get_version.outputs.version }}"
           
           # Build the modules
           cmake --build .
           
           echo "Build completed for ${{ matrix.arch_name }}"
-          ls -la _deps/dmod-build/dmf/
+          ls -la _deps/dmf/
       
       - name: Prepare release package
         run: |
+          ARCH_DIR_NAME=$(echo "${{ matrix.arch_name }}" | sed 's|/|-|')
           set -e
           mkdir -p release_package
+          BUILD_DIR=build_$ARCH_DIR_NAME
+          DMF_DIR="$BUILD_DIR/dmf"
+          DMFC_DIR="$BUILD_DIR/dmfc"
           
-          # Copy built modules (.dmf files)
-          cp build_${{ matrix.arch_name }}/_deps/dmod-build/dmf/dmffs.dmf release_package/
-          cp build_${{ matrix.arch_name }}/_deps/dmod-build/dmf/make_dmffs.dmf release_package/
-          
-          # Copy compressed modules (.dmfc files) if they exist
-          if [ -f "build_${{ matrix.arch_name }}/_deps/dmod-build/dmfc/dmffs.dmfc" ]; then
-            cp build_${{ matrix.arch_name }}/_deps/dmod-build/dmfc/dmffs.dmfc release_package/
-          fi
-          if [ -f "build_${{ matrix.arch_name }}/_deps/dmod-build/dmfc/make_dmffs.dmfc" ]; then
-            cp build_${{ matrix.arch_name }}/_deps/dmod-build/dmfc/make_dmffs.dmfc release_package/
-          fi
-          
+          cp $DMF_DIR/dmffs.dmf release_package/
+          cp $DMF_DIR/dmffs_version.txt release_package/
+          cp $DMFC_DIR/dmffs.dmfc release_package/
+
+          cp $DMF_DIR/make_dmffs.dmf release_package/
+          cp $DMF_DIR/make_dmffs_version.txt release_package/
+          cp $DMFC_DIR/make_dmffs.dmfc release_package/
+                    
           # Copy documentation and license
           cp README.md release_package/
           cp LICENSE release_package/
