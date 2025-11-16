@@ -34,6 +34,7 @@ jobs:
       
       - name: Build dmffs for ${{ matrix.arch_name }}
         run: |
+          set -e
           mkdir -p build_${{ matrix.arch_name }}
           cd build_${{ matrix.arch_name }}
           
@@ -44,6 +45,11 @@ jobs:
           if [ "${{ matrix.arch_name }}" != "x86_64" ]; then
             DMOD_SRC_DIR=$(find . -path "*/_deps/dmod-src" -type d | head -1)
             
+            if [ -z "$DMOD_SRC_DIR" ]; then
+              echo "Error: Could not find dmod source directory"
+              exit 1
+            fi
+            
             # Determine the correct tools config path based on architecture
             case "${{ matrix.arch_name }}" in
               armv7-cortex-m4)
@@ -52,7 +58,18 @@ jobs:
               armv7-cortex-m7)
                 TOOLS_CFG_PATH="${DMOD_SRC_DIR}/configs/arch/armv7/cortex-m7/tools-cfg.cmake"
                 ;;
+              *)
+                echo "Error: Unknown architecture ${{ matrix.arch_name }}"
+                exit 1
+                ;;
             esac
+            
+            if [ ! -f "$TOOLS_CFG_PATH" ]; then
+              echo "Error: Tools config file not found at $TOOLS_CFG_PATH"
+              exit 1
+            fi
+            
+            echo "Using tools config: $TOOLS_CFG_PATH"
             
             # Reconfigure with architecture-specific tools
             rm -rf CMakeCache.txt CMakeFiles
@@ -69,6 +86,7 @@ jobs:
       
       - name: Prepare release package
         run: |
+          set -e
           mkdir -p release_package
           
           # Copy built modules
@@ -87,6 +105,7 @@ jobs:
       
       - name: Create release archive
         run: |
+          set -e
           cd release_package
           zip -r ../dmffs-${{ github.event.release.tag_name }}-${{ matrix.arch_name }}.zip .
           cd ..
@@ -94,11 +113,9 @@ jobs:
           ls -lh dmffs-*.zip
       
       - name: Upload release asset
-        uses: actions/upload-release-asset@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dmffs-${{ github.event.release.tag_name }}-${{ matrix.arch_name }}.zip
-          asset_name: dmffs-${{ github.event.release.tag_name }}-${{ matrix.arch_name }}.zip
-          asset_content_type: application/zip
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} \
+            dmffs-${{ github.event.release.tag_name }}-${{ matrix.arch_name }}.zip \
+            --clobber
