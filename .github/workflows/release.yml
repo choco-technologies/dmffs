@@ -8,6 +8,8 @@ jobs:
   build-release:
     name: Build Release for ${{ matrix.arch_name }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
