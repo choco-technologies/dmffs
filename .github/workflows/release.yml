@@ -117,10 +117,44 @@ jobs:
           echo "Created archive:"
           ls -lh dmffs-*.zip
       
-      - name: Upload release asset
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch_name }}
+          path: dmffs-${{ github.event.release.tag_name }}-${{ matrix.arch_name }}.zip
+          retention-days: 1
+
+  upload-release-assets:
+    name: Upload Release Assets
+    needs: build-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Display artifact structure
+        run: |
+          echo "Downloaded artifacts:"
+          ls -lR artifacts/
+      
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} \
-            dmffs-${{ github.event.release.tag_name }}-${{ matrix.arch_name }}.zip \
-            --clobber
+          # Upload all release archives to the GitHub release
+          for artifact_dir in artifacts/release-*/; do
+            for zip_file in "$artifact_dir"*.zip; do
+              if [ -f "$zip_file" ]; then
+                echo "Uploading $zip_file..."
+                gh release upload ${{ github.event.release.tag_name }} \
+                  "$zip_file" \
+                  --repo ${{ github.repository }} \
+                  --clobber
+              fi
+            done
+          done
