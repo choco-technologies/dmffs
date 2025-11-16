@@ -69,6 +69,7 @@ jobs:
           set -e
           ARCH_DIR_NAME=$(echo "${{ matrix.arch_name }}" | sed 's|/|-|')
           echo "ARCH_DIR_NAME=$ARCH_DIR_NAME" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=release-$ARCH_DIR_NAME" >> $GITHUB_ENV
           mkdir -p build_$ARCH_DIR_NAME
           cd build_$ARCH_DIR_NAME
           
@@ -119,7 +120,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.arch_name }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: dmffs-${{ github.event.release.tag_name }}-*.zip
           retention-days: 1
 
