@@ -68,6 +68,7 @@ jobs:
         run: |
           set -e
           ARCH_DIR_NAME=$(echo "${{ matrix.arch_name }}" | sed 's|/|-|')
+          echo "ARCH_DIR_NAME=$ARCH_DIR_NAME" >> $GITHUB_ENV
           mkdir -p build_$ARCH_DIR_NAME
           cd build_$ARCH_DIR_NAME
           
@@ -83,7 +84,6 @@ jobs:
       
       - name: Prepare release package
         run: |
-          ARCH_DIR_NAME=$(echo "${{ matrix.arch_name }}" | sed 's|/|-|')
           set -e
           mkdir -p release_package
           BUILD_DIR=build_$ARCH_DIR_NAME
@@ -110,9 +110,8 @@ jobs:
       
       - name: Create release archive
         run: |
-          set -e
           cd release_package
-          zip -r ../dmffs-${{ github.event.release.tag_name }}-${{ matrix.arch_name }}.zip .
+          zip -r ../dmffs-${{ github.event.release.tag_name }}-$ARCH_DIR_NAME.zip .
           cd ..
           echo "Created archive:"
           ls -lh dmffs-*.zip
@@ -121,7 +120,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.arch_name }}
-          path: dmffs-${{ github.event.release.tag_name }}-${{ matrix.arch_name }}.zip
+          path: dmffs-${{ github.event.release.tag_name }}-$ARCH_DIR_NAME.zip
           retention-days: 1
 
   upload-release-assets:
