@@ -150,19 +150,19 @@ jobs:
           set -e
           # Upload all release archives to the GitHub release
           shopt -s nullglob
-          found_artifacts=false
-          for zip_file in artifacts/release-*/*.zip; do
-            if [ -f "$zip_file" ]; then
-              found_artifacts=true
-              echo "Uploading $zip_file..."
-              gh release upload ${{ github.event.release.tag_name }} \
-                "$zip_file" \
-                --repo ${{ github.repository }} \
-                --clobber
-            fi
-          done
-          if [ "$found_artifacts" = false ]; then
+          zip_files=(artifacts/release-*/*.zip)
+          
+          if [ ${#zip_files[@]} -eq 0 ]; then
             echo "Error: No artifacts found to upload"
             exit 1
           fi
-          echo "All artifacts uploaded successfully"
+          
+          for zip_file in "${zip_files[@]}"; do
+            echo "Uploading $zip_file..."
+            gh release upload ${{ github.event.release.tag_name }} \
+              "$zip_file" \
+              --repo ${{ github.repository }} \
+              --clobber
+          done
+          
+          echo "Successfully uploaded ${#zip_files[@]} artifact(s)"
