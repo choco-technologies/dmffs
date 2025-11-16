@@ -29,12 +29,10 @@ jobs:
         run: |
           DMOD_SRC_DIR=$(find build_discovery -path "*/_deps/dmod-src" -type d | head -1)
           
-          # Find all architecture configs and create JSON array
-          # Replace first slash with dash to create arch names (e.g., armv7/cortex-m4 -> armv7-cortex-m4)
+          # create JSON array
           ARCHS=$(find ${DMOD_SRC_DIR}/configs/arch -name "tools-cfg.cmake" | \
             sed "s|${DMOD_SRC_DIR}/configs/arch/||g" | \
             sed 's|/tools-cfg.cmake||g' | \
-            sed 's|/|-|' | \
             jq -R -s -c 'split("\n") | map(select(length > 0))')
           
           echo "Found architectures: $ARCHS"
@@ -69,39 +67,12 @@ jobs:
       - name: Build dmffs for ${{ matrix.arch_name }}
         run: |
           set -e
-          mkdir -p build_${{ matrix.arch_name }}
-          cd build_${{ matrix.arch_name }}
+          ARCH_DIR_NAME=$(echo "${{ matrix.arch_name }}" | sed 's|/|-|')
+          mkdir -p build_$ARCH_DIR_NAME
+          cd build_$ARCH_DIR_NAME
           
           # First run cmake to fetch dependencies with version from tag
-          cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_BUILD_TOOLS=ON -DDMOD_MODULE_VERSION="${{ steps.get_version.outputs.version }}"
-          
-          # Find dmod source directory and tools config
-          DMOD_SRC_DIR=$(find . -path "*/_deps/dmod-src" -type d | head -1)
-          
-          if [ -z "$DMOD_SRC_DIR" ]; then
-            echo "Error: Could not find dmod source directory"
-            exit 1
-          fi
-          
-          # Convert arch_name back to path (e.g., armv7-cortex-m4 -> armv7/cortex-m4)
-          # Only replace first dash with slash
-          ARCH_PATH=$(echo "${{ matrix.arch_name }}" | sed 's|-|/|')
-          TOOLS_CFG_PATH="${DMOD_SRC_DIR}/configs/arch/${ARCH_PATH}/tools-cfg.cmake"
-          
-          if [ ! -f "$TOOLS_CFG_PATH" ]; then
-            echo "Error: Tools config file not found at $TOOLS_CFG_PATH"
-            exit 1
-          fi
-          
-          echo "Using tools config: $TOOLS_CFG_PATH"
-          
-          # Reconfigure with architecture-specific tools
-          rm -rf CMakeCache.txt CMakeFiles
-          cmake .. \
-            -DDMOD_MODE=DMOD_MODULE \
-            -DDMOD_BUILD_TOOLS=ON \
-            -DDMOD_MODULE_VERSION="${{ steps.get_version.outputs.version }}" \
-            -DDMOD_TOOLS="${TOOLS_CFG_PATH}"
+          cmake .. -DDMOD_TOOLS_NAME=${{ matrix.arch_name }} -DDMOD_MODULE_VERSION="${{ steps.get_version.outputs.version }}"
           
           # Build the modules
           cmake --build .
