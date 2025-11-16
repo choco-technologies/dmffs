@@ -56,7 +56,7 @@ jobs:
           cd dmvfs
           mkdir build
           cd build
-          cmake .. -DDMOD_MODE=DMOD_SYSTEM -DDMOD_MEMORY="08080000:/tmp/flash-fs.ffs"
+          cmake .. -DDMOD_MODE=DMOD_SYSTEM -DDMOD_MEMORY="08080000:/tmp/flash-fs.ffs" -DDMVFS_BUILD_TESTS=ON
           cmake --build .
           echo "dmvfs built successfully, fs_tester available at:"
           ls -lh ./tests/fs_tester
