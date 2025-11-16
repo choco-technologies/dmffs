@@ -120,7 +120,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.arch_name }}
-          path: dmffs-${{ github.event.release.tag_name }}-$ARCH_DIR_NAME.zip
+          path: dmffs-${{ github.event.release.tag_name }}-*.zip
           retention-days: 1
 
   upload-release-assets:
