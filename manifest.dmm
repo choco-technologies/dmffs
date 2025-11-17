@@ -5,5 +5,3 @@ dmffs https://github.com/choco-technologies/dmffs/releases/download/v<version>/d
 # ============== Additional modules ==============
 # Tools 
 make_dmffs https://github.com/choco-technologies/dmffs/releases/download/v<version>/dmffs-v<version>-<arch_name>.zip
-
-test_tool https://github.com/choco-technologies/dmffs/releases/download/v<version>/dmffs-v<version>-<arch_name>.zip
