@@ -1,5 +1,7 @@
 # ===============    Main module    ===============
 # Main module
+$version-available
+
 dmffs https://github.com/choco-technologies/dmffs/releases/download/v<version>/dmffs-v<version>-<arch_name>.zip
 
 # ============== Additional modules ==============
