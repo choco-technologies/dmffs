@@ -64,6 +64,14 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Extracted version: $VERSION"
       
+      - name: Install ARM toolchain
+        run: |
+          set -e
+          apt-get update -qq
+          apt-get install -y -qq gcc-arm-none-eabi binutils-arm-none-eabi
+          echo "ARM toolchain installed:"
+          arm-none-eabi-gcc --version
+      
       - name: Build dmffs for ${{ matrix.arch_name }}
         run: |
           set -e
