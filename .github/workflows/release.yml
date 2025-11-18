@@ -11,7 +11,7 @@ jobs:
     permissions:
       contents: read
     container:
-      image: chocotechnologies/dmod:1.0.3
+      image: chocotechnologies/dmod:1.0.4
     outputs:
       architectures: ${{ steps.list-archs.outputs.architectures }}
     steps:
@@ -49,7 +49,7 @@ jobs:
         arch_name: ${{ fromJson(needs.discover-architectures.outputs.architectures) }}
     
     container:
-      image: chocotechnologies/dmod:1.0.3
+      image: chocotechnologies/dmod:1.0.4
     
     steps:
       - name: Checkout code
@@ -94,10 +94,18 @@ jobs:
           cp $DMF_DIR/dmffs.dmf release_package/
           cp $DMF_DIR/dmffs_version.txt release_package/
           cp $DMFC_DIR/dmffs.dmfc release_package/
+          # Copy .dmd file if it exists
+          if [ -f $DMF_DIR/dmffs.dmd ]; then
+            cp $DMF_DIR/dmffs.dmd release_package/
+          fi
 
           cp $DMF_DIR/make_dmffs.dmf release_package/
           cp $DMF_DIR/make_dmffs_version.txt release_package/
           cp $DMFC_DIR/make_dmffs.dmfc release_package/
+          # Copy .dmd file if it exists
+          if [ -f $DMF_DIR/make_dmffs.dmd ]; then
+            cp $DMF_DIR/make_dmffs.dmd release_package/
+          fi
                     
           # Copy documentation and license
           cp README.md release_package/
@@ -124,9 +132,54 @@ jobs:
           path: dmffs-${{ github.event.release.tag_name }}-*.zip
           retention-days: 1
 
+  generate-versions-manifest:
+    name: Generate versions.dmm
+    needs: discover-architectures
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to get all tags
+      
+      - name: Generate versions.dmm
+        run: |
+          set -e
+          echo "# List of available versions for dmffs modules" > versions.dmm
+          echo "# Generated automatically by CI" >> versions.dmm
+          echo "" >> versions.dmm
+          
+          # Get all version tags (starting with 'v') and extract version numbers
+          VERSIONS=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tr '\n' ' ' | sed 's/ $//')
+          
+          if [ -z "$VERSIONS" ]; then
+            echo "Warning: No version tags found"
+            VERSIONS="${{ github.event.release.tag_name }}"
+            VERSIONS="${VERSIONS#v}"
+          fi
+          
+          echo "Found versions: $VERSIONS"
+          
+          # Add $version-available directives for both modules
+          echo "\$version-available dmffs $VERSIONS" >> versions.dmm
+          echo "\$version-available make_dmffs $VERSIONS" >> versions.dmm
+          
+          echo "Generated versions.dmm:"
+          cat versions.dmm
+      
+      - name: Upload versions.dmm as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: versions-manifest
+          path: versions.dmm
+          retention-days: 1
+
   upload-release-assets:
     name: Upload Release Assets
-    needs: build-release
+    needs: [build-release, generate-versions-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -142,7 +195,7 @@ jobs:
           echo "Downloaded artifacts:"
           ls -lR artifacts/
       
-      - name: Upload release assets
+      - name: Upload release assets to versioned tag
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -158,11 +211,68 @@ jobs:
           fi
           
           for zip_file in "${zip_files[@]}"; do
-            echo "Uploading $zip_file..."
+            echo "Uploading $zip_file to ${{ github.event.release.tag_name }}..."
             gh release upload ${{ github.event.release.tag_name }} \
               "$zip_file" \
               --repo ${{ github.repository }} \
               --clobber
           done
           
-          echo "Successfully uploaded ${#zip_files[@]} artifact(s)"
+          # Upload versions.dmm to the versioned release
+          if [ -f artifacts/versions-manifest/versions.dmm ]; then
+            echo "Uploading versions.dmm to ${{ github.event.release.tag_name }}..."
+            gh release upload ${{ github.event.release.tag_name }} \
+              artifacts/versions-manifest/versions.dmm \
+              --repo ${{ github.repository }} \
+              --clobber
+          fi
+          
+          echo "Successfully uploaded ${#zip_files[@]} artifact(s) to ${{ github.event.release.tag_name }}"
+      
+      - name: Create or update latest release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          
+          # Check if vlatest release exists
+          if gh release view vlatest --repo ${{ github.repository }} >/dev/null 2>&1; then
+            echo "Release vlatest exists, deleting it..."
+            gh release delete vlatest --repo ${{ github.repository }} --yes
+          fi
+          
+          # Create new vlatest release
+          echo "Creating vlatest release..."
+          gh release create vlatest \
+            --repo ${{ github.repository }} \
+            --title "Latest Release (based on ${{ github.event.release.tag_name }})" \
+            --notes "This release always points to the latest stable version. Currently based on ${{ github.event.release.tag_name }}."
+      
+      - name: Upload release assets to latest tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          shopt -s nullglob
+          zip_files=(artifacts/release-*/*.zip)
+          
+          for zip_file in "${zip_files[@]}"; do
+            echo "Uploading $zip_file to vlatest..."
+            gh release upload vlatest \
+              "$zip_file" \
+              --repo ${{ github.repository }} \
+              --clobber
+          done
+          
+          # Upload versions.dmm to the latest release
+          if [ -f artifacts/versions-manifest/versions.dmm ]; then
+            echo "Uploading versions.dmm to vlatest..."
+            gh release upload vlatest \
+              artifacts/versions-manifest/versions.dmm \
+              --repo ${{ github.repository }} \
+              --clobber
+          fi
+          
+          echo "Successfully uploaded ${#zip_files[@]} artifact(s) to vlatest"
