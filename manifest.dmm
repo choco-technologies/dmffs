@@ -1,6 +1,6 @@
 # ===============    Main module    ===============
 # Main module
-$version-available
+$version-available dmffs 1.0 1.1
 
 dmffs https://github.com/choco-technologies/dmffs/releases/download/v<version>/dmffs-v<version>-<arch_name>.zip
 
