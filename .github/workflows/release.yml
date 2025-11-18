@@ -153,7 +153,7 @@ jobs:
           echo "" >> versions.dmm
           
           # Get all version tags (starting with 'v') and extract version numbers
-          VERSIONS=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tr '\n' ' ')
+          VERSIONS=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tr '\n' ' ' | sed 's/ $//')
           
           if [ -z "$VERSIONS" ]; then
             echo "Warning: No version tags found"
