@@ -155,6 +155,9 @@ jobs:
           # Get all version tags (starting with 'v') and extract version numbers
           VERSIONS=$(git tag -l 'v*' | sed 's/^v//' | sort -V | tr '\n' ' ' | sed 's/ $//')
           
+          # Remove vlatest from the list if present
+          VERSIONS=$(echo $VERSIONS | sed 's/\blatest\b//g' | xargs)
+
           if [ -z "$VERSIONS" ]; then
             echo "Warning: No version tags found"
             VERSIONS="${{ github.event.release.tag_name }}"
