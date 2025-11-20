@@ -31,7 +31,11 @@ FetchContent_Declare(
 #               DMOD Configuration
 # ======================================================================
 set(DMOD_MODE "DMOD_MODULE" CACHE STRING "DMOD build mode")
-set(DMOD_TOOLS_NAME "" CACHE STRING "DMOD tools configuration name")
+# Declare DMOD_TOOLS_NAME as CACHE variable to propagate to DMOD subproject
+# Only set if provided via -DDMOD_TOOLS_NAME=... to avoid empty value issues
+if(DMOD_TOOLS_NAME)
+    set(DMOD_TOOLS_NAME "${DMOD_TOOLS_NAME}" CACHE STRING "DMOD tools configuration name")
+endif()
 set(DMOD_BUILD_TESTS OFF CACHE BOOL "Build tests")
 set(DMOD_BUILD_EXAMPLES OFF CACHE BOOL "Build examples")
 set(DMOD_BUILD_TOOLS OFF CACHE BOOL "Build tools")
