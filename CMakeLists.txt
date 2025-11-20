@@ -12,11 +12,6 @@ if(NOT DEFINED DMOD_MODULE_VERSION)
     set(DMOD_MODULE_VERSION "0.1" CACHE STRING "DMOD module version")
 endif()
 
-project(dmffs 
-    VERSION ${DMOD_MODULE_VERSION}
-    DESCRIPTION "DMOD Flash File System"
-    LANGUAGES C CXX)
-
 # ======================================================================
 #               Fetch DMOD repository
 # ======================================================================
@@ -37,6 +32,11 @@ set(DMOD_BUILD_TOOLS OFF CACHE BOOL "Build tools")
 set(DMOD_BUILD_TEMPLATES OFF CACHE BOOL "Build templates")
 
 FetchContent_MakeAvailable(dmod)
+
+project(dmffs 
+    VERSION ${DMOD_MODULE_VERSION}
+    DESCRIPTION "DMOD Flash File System"
+    LANGUAGES C CXX)
 
 # ======================================================================
 #               Import dmod functions and macros
