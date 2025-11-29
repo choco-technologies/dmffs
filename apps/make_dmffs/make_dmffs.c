@@ -351,14 +351,14 @@ int main(int argc, const char* argv[])
     // Check arguments
     // When run via dmod_loader with --args, argc doesn't include program name
     // So we expect argc=2 (input_dir, output_file)
-    if (argc != 2) {
+    if (argc != 3) {
         DMOD_LOG_ERROR("Usage: make_dmffs <input_directory> <output_file>\n");
         DMOD_LOG_ERROR("Example: make_dmffs ./flashfs ./out/flash-fs.bin\n");
         return 1;
     }
     
-    const char* input_dir = argv[0];
-    const char* output_path = argv[1];
+    const char* input_dir = argv[1];
+    const char* output_path = argv[2];
     
     DMOD_LOG_INFO("Input directory: %s\n", input_dir);
     DMOD_LOG_INFO("Output file: %s\n", output_path);
