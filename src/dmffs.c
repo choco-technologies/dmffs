@@ -525,7 +525,7 @@ int dmod_deinit(void)
  * "flash_addr=0x08000000;flash_size=0x100000" or "addr=0x08000000,size=0x100000"
  * Both semicolon and comma separators are supported.
  * 
- * If no configuration string is provided, default parameters from environment variables. 
+ * If no configuration string is provided, default parameters are loaded from environment variables. 
  * 
  * @param config (optional) Configuration string (FS-specific)
  * @return Context pointer on success, NULL on failure
