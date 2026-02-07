@@ -106,11 +106,12 @@ static size_t parse_hex_string(const char* hex_str)
 static bool parse_config_string( dmfsi_context_t ctx, const char* config )
 {
     // Example config string: "flash_addr=0x08000000;flash_size=0x100000"
+    // Also supports: "addr=0x08000000,size=0x100000"
     const char* ptr = config;
     while (*ptr) {
         // Parse key
         const char* key_start = ptr;
-        while (*ptr && *ptr != '=' && *ptr != ';') ptr++;
+        while (*ptr && *ptr != '=' && *ptr != ';' && *ptr != ',') ptr++;
         size_t key_len = ptr - key_start;
         
         if (*ptr != '=') {
@@ -122,15 +123,17 @@ static bool parse_config_string( dmfsi_context_t ctx, const char* config )
         
         // Parse value
         const char* value_start = ptr;
-        while (*ptr && *ptr != ';') ptr++;
+        while (*ptr && *ptr != ';' && *ptr != ',') ptr++;
         size_t value_len = ptr - value_start;
         
-        // Process key-value pair
-        if (key_len == 10 && strncmp(key_start, "flash_addr", 10) == 0) {
+        // Process key-value pair - support both long and short key names
+        if ((key_len == 10 && strncmp(key_start, "flash_addr", 10) == 0) ||
+            (key_len == 4 && strncmp(key_start, "addr", 4) == 0)) {
             char value_str[20] = {0};
             strncpy(value_str, value_start, value_len < 19 ? value_len : 19);
             ctx->flash_addr = (const void*)parse_hex_string(value_str);
-        } else if (key_len == 10 && strncmp(key_start, "flash_size", 10) == 0) {
+        } else if ((key_len == 10 && strncmp(key_start, "flash_size", 10) == 0) ||
+                   (key_len == 4 && strncmp(key_start, "size", 4) == 0)) {
             char value_str[20] = {0};
             strncpy(value_str, value_start, value_len < 19 ? value_len : 19);
             ctx->flash_size = parse_hex_string(value_str);
@@ -138,7 +141,8 @@ static bool parse_config_string( dmfsi_context_t ctx, const char* config )
             DMOD_LOG_WARN("Unknown config key: '%.*s'\n", (int)key_len, key_start);
         }
         
-        if (*ptr == ';') ptr++; // Skip ';'
+        // Skip separator (semicolon or comma)
+        if (*ptr == ';' || *ptr == ',') ptr++;
     }
     
     return true;
@@ -518,7 +522,8 @@ int dmod_deinit(void)
  * 
  * The function initializes the DMFFS file system with the provided configuration string.
  * The configuration string can specify flash parameters such as address and size, in format:
- * "flash_addr=0x08000000;flash_size=0x100000"
+ * "flash_addr=0x08000000;flash_size=0x100000" or "addr=0x08000000,size=0x100000"
+ * Both semicolon and comma separators are supported.
  * 
  * If no configuration string is provided, default parameters from environment variables. 
  * 
