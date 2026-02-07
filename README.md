@@ -329,10 +329,27 @@ dmfsi_context_t ctx = dmfsi_dmffs_init(NULL);
 
 #### 2. Configuration String (Per-Instance)
 
+The configuration string supports flexible formats for convenience:
+
 ```c
-// Pass configuration directly
+// Long format with semicolon (original)
 dmfsi_context_t ctx = dmfsi_dmffs_init("flash_addr=0x08080000;flash_size=0x80000");
+
+// Short format with comma (also supported)
+dmfsi_context_t ctx = dmfsi_dmffs_init("addr=0x08080000,size=0x80000");
+
+// Mixed formats work too
+dmfsi_context_t ctx = dmfsi_dmffs_init("addr=0x08080000;size=0x80000");
+dmfsi_context_t ctx = dmfsi_dmffs_init("flash_addr=0x08080000,flash_size=0x80000");
 ```
+
+Supported key names:
+- `flash_addr` or `addr` - Flash memory base address (hex value)
+- `flash_size` or `size` - Flash memory size (hex value)
+
+Supported separators:
+- `;` (semicolon)
+- `,` (comma)
 
 ### Advanced Features
 
