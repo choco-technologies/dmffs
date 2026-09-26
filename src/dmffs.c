@@ -7,7 +7,7 @@
 #include "string.h"
 
 static const void* g_flash_addr = NULL;     //!< default flash address
-static size_t g_flash_size = 0;             //!< default flash size
+static dmfsi_size_t g_flash_size = 0;       //!< default flash size
 
 #define MAGIC_DMFSS_CTX 0x444D4653  // 'DMFS'
 
@@ -18,7 +18,7 @@ struct dmfsi_context
 {
     uint32_t magic;             //!< magic number for validation
     const void* flash_addr;     //!< flash base address
-    size_t flash_size;          //!< flash size in bytes
+    dmfsi_size_t flash_size;    //!< flash size in bytes
 };
 
 /**
@@ -26,8 +26,8 @@ struct dmfsi_context
  */
 typedef struct {
     char name[256];             //!< file name
-    uint32_t data_offset;       //!< offset to file data in flash
-    uint32_t data_size;         //!< size of file data
+    dmfsi_size_t data_offset;   //!< offset to file data in flash
+    dmfsi_size_t data_size;     //!< size of file data
     uint32_t attr;              //!< file attributes
     uint32_t mtime;             //!< modification time
     uint32_t ctime;             //!< creation time
@@ -38,7 +38,7 @@ typedef struct {
  */
 typedef struct {
     dmffs_file_entry_t entry;   //!< file entry metadata
-    long position;              //!< current read position
+    dmfsi_offset_t position;    //!< current read position
     dmfsi_context_t ctx;        //!< file system context
 } dmffs_file_handle_t;
 
@@ -47,11 +47,11 @@ typedef struct {
  */
 typedef struct {
     dmfsi_context_t ctx;        //!< file system context
-    uint32_t current_offset;    //!< current offset in flash for scanning
+    dmfsi_size_t current_offset; //!< current offset in flash for scanning
     int entry_index;            //!< current entry index
     char path[256];             //!< current directory path
     bool in_dir;                //!< true if currently inside a DIR entry
-    uint32_t dir_end_offset;    //!< end offset of current DIR
+    dmfsi_size_t dir_end_offset; //!< end offset of current DIR
 } dmffs_dir_handle_t;
 
 /**
@@ -154,7 +154,7 @@ static bool parse_config_string( dmfsi_context_t ctx, const char* config )
  * @param length Pointer to store TLV length
  * @return true if successful, false otherwise
  */
-static bool read_tlv_header(dmfsi_context_t ctx, uint32_t offset, uint32_t* type, uint32_t* length)
+static bool read_tlv_header(dmfsi_context_t ctx, dmfsi_size_t offset, uint32_t* type, uint32_t* length)
 {
     if (!ctx || !type || !length) return false;
     
@@ -182,7 +182,7 @@ static bool read_tlv_header(dmfsi_context_t ctx, uint32_t offset, uint32_t* type
  * @param length Number of bytes to read
  * @return Number of bytes read
  */
-static size_t read_tlv_value(dmfsi_context_t ctx, uint32_t offset, void* buffer, uint32_t length)
+static size_t read_tlv_value(dmfsi_context_t ctx, dmfsi_size_t offset, void* buffer, uint32_t length)
 {
     if (!ctx || !buffer || length == 0) return 0;
     
@@ -198,34 +198,34 @@ static size_t read_tlv_value(dmfsi_context_t ctx, uint32_t offset, void* buffer,
  * @param entry Pointer to store parsed file entry
  * @return Offset to next TLV entry, or 0 on error
  */
-static uint32_t parse_file_entry(dmfsi_context_t ctx, uint32_t offset, dmffs_file_entry_t* entry)
+static dmfsi_size_t parse_file_entry(dmfsi_context_t ctx, dmfsi_size_t offset, dmffs_file_entry_t* entry)
 {
     if (!ctx || !entry) return 0;
-    
+
     uint32_t type, length;
     if (!read_tlv_header(ctx, offset, &type, &length)) {
         return 0;
     }
-    
+
     if (type != DMFFS_TLV_TYPE_FILE) {
         return 0;
     }
-    
+
     // Initialize entry
     memset(entry, 0, sizeof(dmffs_file_entry_t));
     entry->attr = DMFSI_ATTR_READONLY;
-    
+
     // Parse nested TLVs within FILE entry
-    uint32_t nested_offset = offset + 8; // Skip FILE TLV header
-    uint32_t end_offset = offset + 8 + length;
-    
+    dmfsi_size_t nested_offset = offset + 8; // Skip FILE TLV header
+    dmfsi_size_t end_offset = offset + 8 + length;
+
     while (nested_offset < end_offset) {
         uint32_t nested_type, nested_length;
         if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
             break;
         }
-        
-        uint32_t value_offset = nested_offset + 8;
+
+        dmfsi_size_t value_offset = nested_offset + 8;
         
         switch (nested_type) {
             case DMFFS_TLV_TYPE_NAME:
@@ -291,11 +291,11 @@ static uint32_t parse_file_entry(dmfsi_context_t ctx, uint32_t offset, dmffs_fil
  * @return true if the directory was found (root is always found)
  */
 static bool find_directory_range(dmfsi_context_t ctx, const char* dir_path,
-                                  uint32_t* out_start, uint32_t* out_end,
+                                  dmfsi_size_t* out_start, dmfsi_size_t* out_end,
                                   uint32_t* out_attr, uint32_t* out_date)
 {
-    uint32_t offset = 0;
-    uint32_t end = ctx->flash_size;
+    dmfsi_size_t offset = 0;
+    dmfsi_size_t end = ctx->flash_size;
     uint32_t type, length;
 
     if (read_tlv_header(ctx, offset, &type, &length) && type == DMFFS_TLV_TYPE_VERSION) {
@@ -332,8 +332,8 @@ static bool find_directory_range(dmfsi_context_t ctx, const char* dir_path,
             }
 
             if (type == DMFFS_TLV_TYPE_DIR) {
-                uint32_t nested_offset = offset + 8;
-                uint32_t dir_end = offset + 8 + length;
+                dmfsi_size_t nested_offset = offset + 8;
+                dmfsi_size_t dir_end = offset + 8 + length;
                 char dir_name[256] = {0};
                 uint32_t dir_attr = DMFSI_ATTR_DIRECTORY | DMFSI_ATTR_READONLY;
                 uint32_t dir_date = 0;
@@ -343,7 +343,7 @@ static bool find_directory_range(dmfsi_context_t ctx, const char* dir_path,
                     if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
                         break;
                     }
-                    uint32_t value_offset = nested_offset + 8;
+                    dmfsi_size_t value_offset = nested_offset + 8;
 
                     if (nested_type == DMFFS_TLV_TYPE_NAME && nested_length > 0 &&
                         nested_length <= sizeof(dir_name) - 1) {
@@ -408,7 +408,7 @@ static bool find_file_by_path(dmfsi_context_t ctx, const char* path, dmffs_file_
         *last_slash = '\0'; // Terminate directory path
     }
 
-    uint32_t offset, end;
+    dmfsi_size_t offset, end;
     if (!find_directory_range(ctx, last_slash ? path_copy : "", &offset, &end, NULL, NULL)) {
         return false; // Directory not found
     }
@@ -424,7 +424,7 @@ static bool find_file_by_path(dmfsi_context_t ctx, const char* path, dmffs_file_
         }
 
         if (type == DMFFS_TLV_TYPE_FILE) {
-            uint32_t next_offset = parse_file_entry(ctx, offset, entry);
+            dmfsi_size_t next_offset = parse_file_entry(ctx, offset, entry);
 
             if (next_offset == 0) {
                 // Parse error - skip this TLV entry manually
@@ -698,19 +698,20 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fread, (dmfsi_context_t ctx, v
     *read = 0;
     
     // Check if we're at EOF
-    if (handle->position >= handle->entry.data_size) {
+    dmfsi_size_t position = (dmfsi_size_t)handle->position;
+    if (position >= handle->entry.data_size) {
         return DMFSI_OK;
     }
-    
+
     // Calculate how much we can read
-    size_t available = handle->entry.data_size - handle->position;
+    size_t available = (size_t)(handle->entry.data_size - position);
     size_t to_read = (size < available) ? size : available;
-    
+
     // Read from flash
-    uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + handle->entry.data_offset + handle->position;
+    uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + handle->entry.data_offset + position;
     size_t bytes_read = Dmod_ReadMemory(flash_addr, buffer, to_read);
-    
-    handle->position += bytes_read;
+
+    handle->position += (dmfsi_offset_t)bytes_read;
     *read = bytes_read;
     
     return DMFSI_OK;
@@ -725,40 +726,40 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fwrite, (dmfsi_context_t ctx, 
     return DMFSI_ERR_INVALID;
 }
 
-dmod_dmfsi_dif_api_declaration( 1.0, dmffs, long, _lseek, (dmfsi_context_t ctx, void* fp, long offset, int whence) )
+dmod_dmfsi_dif_api_declaration( 2.0, dmffs, dmfsi_offset_t, _lseek, (dmfsi_context_t ctx, void* fp, dmfsi_offset_t offset, int whence) )
 {
     if (!ctx || !fp) {
         return -1;
     }
-    
+
     dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
-    long new_position = 0;
-    
+    dmfsi_offset_t new_position = 0;
+
     switch (whence) {
         case DMFSI_SEEK_SET:
             new_position = offset;
             break;
-            
+
         case DMFSI_SEEK_CUR:
             new_position = handle->position + offset;
             break;
-            
+
         case DMFSI_SEEK_END:
-            new_position = handle->entry.data_size + offset;
+            new_position = (dmfsi_offset_t)handle->entry.data_size + offset;
             break;
-            
+
         default:
             return -1;
     }
-    
+
     // Validate position
     if (new_position < 0) {
         new_position = 0;
     }
-    if (new_position > (long)handle->entry.data_size) {
-        new_position = handle->entry.data_size;
+    if ((dmfsi_size_t)new_position > handle->entry.data_size) {
+        new_position = (dmfsi_offset_t)handle->entry.data_size;
     }
-    
+
     handle->position = new_position;
     return new_position;
 }
@@ -782,12 +783,12 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _getc, (dmfsi_context_t ctx, vo
     dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
     
     // Check EOF
-    if (handle->position >= handle->entry.data_size) {
+    if ((dmfsi_size_t)handle->position >= handle->entry.data_size) {
         return -1;
     }
-    
+
     uint8_t c;
-    uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + handle->entry.data_offset + handle->position;
+    uintptr_t flash_addr = (uintptr_t)ctx->flash_addr + handle->entry.data_offset + (dmfsi_size_t)handle->position;
     if (Dmod_ReadMemory(flash_addr, &c, 1) != 1) {
         return -1;
     }
@@ -805,12 +806,12 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _putc, (dmfsi_context_t ctx, vo
     return -1;
 }
 
-dmod_dmfsi_dif_api_declaration( 1.0, dmffs, long, _tell, (dmfsi_context_t ctx, void* fp) )
+dmod_dmfsi_dif_api_declaration( 2.0, dmffs, dmfsi_offset_t, _tell, (dmfsi_context_t ctx, void* fp) )
 {
     if (!ctx || !fp) {
         return -1;
     }
-    
+
     dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
     return handle->position;
 }
@@ -820,17 +821,17 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _eof, (dmfsi_context_t ctx, voi
     if (!ctx || !fp) {
         return -1;
     }
-    
+
     dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
-    return (handle->position >= handle->entry.data_size) ? 1 : 0;
+    return ((dmfsi_size_t)handle->position >= handle->entry.data_size) ? 1 : 0;
 }
 
-dmod_dmfsi_dif_api_declaration( 1.0, dmffs, long, _size, (dmfsi_context_t ctx, void* fp) )
+dmod_dmfsi_dif_api_declaration( 1.0, dmffs, dmfsi_size_t, _size, (dmfsi_context_t ctx, void* fp) )
 {
     if (!ctx || !fp) {
-        return -1;
+        return 0;
     }
-    
+
     dmffs_file_handle_t* handle = (dmffs_file_handle_t*)fp;
     return handle->entry.data_size;
 }
@@ -889,7 +890,7 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx,
     }
     
     // Find the (possibly nested) directory's content range
-    uint32_t start, end;
+    dmfsi_size_t start, end;
     if (!find_directory_range(ctx, handle->path, &start, &end, NULL, NULL)) {
         Dmod_Free(handle);
         return DMFSI_ERR_NOT_FOUND;
@@ -923,21 +924,21 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
     }
     
     // If we're inside a directory, only scan within that directory
-    uint32_t end_offset = handle->in_dir ? handle->dir_end_offset : ctx->flash_size;
-    
+    dmfsi_size_t end_offset = handle->in_dir ? handle->dir_end_offset : ctx->flash_size;
+
     while (handle->current_offset < end_offset) {
         uint32_t type, length;
         if (!read_tlv_header(ctx, handle->current_offset, &type, &length)) {
             break;
         }
-        
+
         if (type == DMFFS_TLV_TYPE_END || type == DMFFS_TLV_TYPE_INVALID) {
             break;
         }
-        
+
         if (type == DMFFS_TLV_TYPE_FILE) {
             dmffs_file_entry_t file_entry;
-            uint32_t next_offset = parse_file_entry(ctx, handle->current_offset, &file_entry);
+            dmfsi_size_t next_offset = parse_file_entry(ctx, handle->current_offset, &file_entry);
             
             if (next_offset == 0) {
                 // Parse error - skip this TLV entry manually
@@ -958,20 +959,20 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
             }
         } else if (type == DMFFS_TLV_TYPE_DIR) {
             // List a nested directory as an entry, regardless of nesting depth
-            uint32_t nested_offset = handle->current_offset + 8;
-            uint32_t dir_end = handle->current_offset + 8 + length;
+            dmfsi_size_t nested_offset = handle->current_offset + 8;
+            dmfsi_size_t dir_end = handle->current_offset + 8 + length;
             char dir_name[256] = {0};
             uint32_t dir_attr = DMFSI_ATTR_DIRECTORY | DMFSI_ATTR_READONLY;
             uint32_t dir_time = 0;
-            
+
             // Parse DIR metadata
             while (nested_offset < dir_end) {
                 uint32_t nested_type, nested_length;
                 if (!read_tlv_header(ctx, nested_offset, &nested_type, &nested_length)) {
                     break;
                 }
-                
-                uint32_t value_offset = nested_offset + 8;
+
+                dmfsi_size_t value_offset = nested_offset + 8;
                 
                 if (nested_type == DMFFS_TLV_TYPE_NAME && nested_length > 0) {
                     if (nested_length <= sizeof(dir_name) - 1) {
@@ -1050,7 +1051,7 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _direxists, (dmfsi_context_t ct
         dir_path++;
     }
 
-    uint32_t start, end;
+    dmfsi_size_t start, end;
     return find_directory_range(ctx, dir_path, &start, &end, NULL, NULL) ? 1 : 0;
 }
 
@@ -1091,7 +1092,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _stat, (dmfsi_context_t ctx, co
     }
     
     // Check if it's a directory (possibly nested)
-    uint32_t start, end, dir_attr, dir_time;
+    dmfsi_size_t start, end;
+    uint32_t dir_attr, dir_time;
     if (find_directory_range(ctx, path, &start, &end, &dir_attr, &dir_time)) {
         stat->size = 0;
         stat->attr = dir_attr;
