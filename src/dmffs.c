@@ -904,7 +904,7 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx,
     return DMFSI_OK;
 }
 
-dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _readdir, (dmfsi_context_t ctx, void* dp, dmfsi_dir_entry_t* entry) )
+dmod_dmfsi_dif_api_declaration( 2.0, dmffs, int, _readdir, (dmfsi_context_t ctx, void* dp, dmfsi_dir_entry_t* entry) )
 {
     if (!ctx || !dp || !entry) {
         return DMFSI_ERR_INVALID;
@@ -1055,7 +1055,7 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _direxists, (dmfsi_context_t ct
     return find_directory_range(ctx, dir_path, &start, &end, NULL, NULL) ? 1 : 0;
 }
 
-dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _stat, (dmfsi_context_t ctx, const char* path, dmfsi_stat_t* stat) )
+dmod_dmfsi_dif_api_declaration( 2.0, dmffs, int, _stat, (dmfsi_context_t ctx, const char* path, dmfsi_stat_t* stat) )
 {
     if (!ctx || !path || !stat) {
         return DMFSI_ERR_INVALID;
