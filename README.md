@@ -1,6 +1,8 @@
 # DMFFS - DMOD Flash File System
 
-A lightweight, read-only file system module for embedded systems that stores and reads file systems from flash memory using an efficient TLV (Type-Length-Value) format.
+A lightweight file system module for embedded systems that stores file systems in flash memory in an efficient TLV
+(Type-Length-Value) format: read-only straight from a memory address, or **writable** on a block device (see
+[Writable mode](#writable-mode)).
 
 ## Overview
 
@@ -75,6 +77,39 @@ DMFFS is part of a modular embedded file system architecture built on DMOD:
    - DMFFS reads the TLV structure directly from flash
    - Access files through DMFSI API or mount in DMVFS
    - No RAM copying required - files are read directly from flash
+
+## Writable mode
+
+Mounted with `device=<node>` instead of `addr=` / `size=`, dmffs reads and writes a **block device node** - the
+dmflash node of a sector of the internal flash, say (`mount -t dmffs -o device=/dev/dmflashx/fs /int`):
+
+```
+device=/dev/dmflashx/fs      a block device node: its whole size is the file system
+device=ram:32768             the same in RAM (shared by the mounts of the module): the tests, a volatile file system
+```
+
+* **The file system is in RAM while it is mounted.** The device is read once, at the mount, into a tree of directories
+  and files; the changes (`fopen` for writing, `fwrite`, `mkdir`, `unlink`, `rename`, `chmod`, `utime`) are made in the
+  tree. **Closing a file does not write it.**
+* **`fflush` and `sync` write the device**: the tree is serialized to the image format below, the device is erased,
+  programmed and read back. Nothing pending: nothing is written. What is pending when the mount goes (`umount`) is
+  written then.
+* **The image is the same format** as `make_dmffs` writes (and the read-only mount reads), plus one entry at the end:
+  `CRC` (type 10), the CRC-32 of everything before it. A device that holds something else, or an image whose CRC does
+  not match (a write that was cut short), mounts as an empty file system with a warning - the next flush replaces it.
+  An erased device is an empty file system; an image without a CRC (from `make_dmffs`) is accepted.
+* **Writing is whole-file**, sequential or at any offset in a file held in RAM; there is no partial update of the
+  device. The limit is the size of the device (`DMFSI_ERR_NO_SPACE`), counted with the overhead of the entries
+  (8 bytes of header per entry, the name, 8 + 4 for the attributes and the same for the date).
+* **Limits:** names of 1 to 255 bytes, 8 levels of directories, a file cannot be removed or renamed while it is open.
+* **Power loss:** between the erase and the end of the write the data exist only in RAM. A cut there leaves an image
+  that fails the CRC (an empty file system, not garbage). For data that must not be lost, put two devices (two
+  sectors) in rotation: write the other one, then erase the old one - not done by dmffs itself.
+* **Code size:** the writable mode adds about 8 kB to the module (6.4 kB read-only, 14.7 kB with it, `MinSizeRel`
+  on Cortex-M7).
+
+The tree and the image (`src/dmffs_tree.c`) depend on nothing of DMOD but the allocator, so a boot loader can use the
+same code; `tests/tree_test.c` tests it on the host with sanitizers.
 
 ## TLV File System Format
 

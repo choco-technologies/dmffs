@@ -31,6 +31,13 @@ jobs:
           cmake ../build/_deps/dmod-src -DDMOD_MODE=DMOD_SYSTEM
           cmake --build . --target dmod_loader
       
+      - name: Test the writable mode
+        run: |
+          # The tree of a writable mount on the host (sanitizers) and the module against a medium in RAM
+          export PATH=$PWD/build_dmod/examples/system/dmod_loader:$PATH
+          export DMOD_DMF_DIR=$PWD/build/dmf
+          ctest --test-dir build --output-on-failure
+
       - name: Prepare test filesystem
         run: |
           mkdir -p /tmp/flashfs/subdir
