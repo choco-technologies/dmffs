@@ -1,12 +1,11 @@
 #define DMOD_ENABLE_REGISTRATION    ON
-#define ENABLE_DIF_REGISTRATIONS    ON
+// (the DIF signatures - dmod_dmfsi_*_sig - are defined in dmffs_plugin.c)
 #include "dmod.h"
 #include "dmffs.h"
 #include "dmffs_defs.h"
 #include "dmfsi.h"
 #include "string.h"
-#include "dmffs_rw.h"
-#include "dmffs_medium.h"
+#include "dmffs_plugin.h"
 
 static const void* g_flash_addr = NULL;     //!< default flash address
 static dmfsi_size_t g_flash_size = 0;       //!< default flash size
@@ -21,8 +20,9 @@ struct dmfsi_context
     uint32_t magic;             //!< magic number for validation
     const void* flash_addr;     //!< flash base address
     dmfsi_size_t flash_size;    //!< flash size in bytes
-    char* device;               //!< "device=..." of the configuration: a writable mount (dmffs_rw.c) instead of flash_addr / flash_size
-    dmffs_rw_t* rw;             //!< the writable mount; NULL when the file system is read from flash_addr
+    char* device;               //!< "device=..." of the configuration: where a writable mount (dmffs_rw) keeps the file system
+    dmffs_plugin_t* plugin;     //!< the writable mount (dmffs_rw); NULL while the file system is read from flash_addr
+    uint32_t opens;             //!< files and directories open on the read-only mount: it becomes writable only when there are none
 };
 
 /**
@@ -547,7 +547,6 @@ int dmod_init(const Dmod_Config_t *Config)
  */
 int dmod_deinit(void)
 {
-    dmffs_medium_ram_free();
     return 0;
 }
 
@@ -578,7 +577,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, dmfsi_context_t, _init, (const char*
     ctx->flash_addr = g_flash_addr;
     ctx->flash_size = g_flash_size;
     ctx->device = NULL;
-    ctx->rw = NULL;
+    ctx->plugin = NULL;
+    ctx->opens = 0;
 
     // Parse configuration string
     if (config && !parse_config_string(ctx, config)) {
@@ -588,10 +588,11 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, dmfsi_context_t, _init, (const char*
         return NULL;
     }
 
-    // "device=..." makes it a writable file system, kept in RAM and written to the device on a flush
-    if (ctx->device) {
-        ctx->rw = dmffs_rw_open(ctx->device);
-        if (!ctx->rw) {
+    // "device=..." makes it a writable file system: a mount of the module dmffs_rw. With addr= and size= too the mount
+    // is read-only, straight from the flash, until the first change - the module may come later (it is on /ext).
+    if (ctx->device && !ctx->flash_addr) {
+        ctx->plugin = dmffs_plugin_attach(ctx->device);
+        if (!ctx->plugin) {
             Dmod_Free(ctx->device);
             Dmod_Free(ctx);
             return NULL;
@@ -623,13 +624,27 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _deinit, (dmfsi_context_t ctx) 
     }
 
     int rc = DMFSI_OK;
-    if (ctx->rw) {
-        rc = dmffs_rw_close(ctx->rw);       // writes what is pending
+    if (ctx->plugin) {
+        rc = dmffs_plugin_detach(ctx->plugin);      // writes what is pending
     }
     Dmod_Free( ctx->device );
     ctx->magic = 0;
     Dmod_Free( ctx );
     return rc;
+}
+
+/**
+ * @brief A change was asked for on a mount that is read straight from the flash
+ *
+ * If the mount knows the device to write to ("device=...") and nothing is open on it, the module dmffs_rw is loaded
+ * and takes the mount over: from now on the file system is its tree in RAM. Without the module (or with something
+ * open) the change is refused, as it always was.
+ */
+static void upgrade_to_writable(dmfsi_context_t ctx)
+{
+    if (ctx != NULL && ctx->plugin == NULL && ctx->device != NULL && ctx->opens == 0) {
+        ctx->plugin = dmffs_plugin_attach(ctx->device);
+    }
 }
 
 /**
@@ -643,8 +658,11 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _deinit, (dmfsi_context_t ctx) 
  */
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fopen, (dmfsi_context_t ctx, void** fp, const char* path, int mode, int attr) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_fopen(ctx->rw, fp, path, mode, attr);
+    if (ctx != NULL && ((mode & 3) == DMFSI_O_WRONLY || (mode & 3) == DMFSI_O_RDWR || (mode & (DMFSI_O_CREAT | DMFSI_O_TRUNC)))) {
+        upgrade_to_writable(ctx);
+    }
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->fopen(ctx->plugin->ctx, fp, path, mode, attr);
     }
 
     if (!ctx || !fp || !path) {
@@ -683,6 +701,7 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fopen, (dmfsi_context_t ctx, v
             handle->position = 0;
             handle->ctx = ctx;
             
+            ctx->opens++;
             *fp = handle;
             return DMFSI_OK;
         }
@@ -702,6 +721,7 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fopen, (dmfsi_context_t ctx, v
         handle->position = 0;
         handle->ctx = ctx;
         
+        ctx->opens++;
         *fp = handle;
         return DMFSI_OK;
     }
@@ -711,22 +731,23 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fopen, (dmfsi_context_t ctx, v
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fclose, (dmfsi_context_t ctx, void* fp) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_fclose(ctx->rw, fp);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->fclose(ctx->plugin->ctx, fp);
     }
 
     if (!ctx || !fp) {
         return DMFSI_ERR_INVALID;
     }
     
+    if (ctx->opens) ctx->opens--;
     Dmod_Free(fp);
     return DMFSI_OK;
 }
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fread, (dmfsi_context_t ctx, void* fp, void* buffer, size_t size, size_t* read) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_fread(ctx->rw, fp, buffer, size, read);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->fread(ctx->plugin->ctx, fp, buffer, size, read);
     }
 
     if (!ctx || !fp || !buffer || !read) {
@@ -758,8 +779,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fread, (dmfsi_context_t ctx, v
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fwrite, (dmfsi_context_t ctx, void* fp, const void* buffer, size_t size, size_t* written) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_fwrite(ctx->rw, fp, buffer, size, written);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->fwrite(ctx->plugin->ctx, fp, buffer, size, written);
     }
 
     if (written) {
@@ -771,8 +792,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fwrite, (dmfsi_context_t ctx, 
 
 dmod_dmfsi_dif_api_declaration( 2.0, dmffs, dmfsi_offset_t, _lseek, (dmfsi_context_t ctx, void* fp, dmfsi_offset_t offset, int whence) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_lseek(ctx->rw, fp, offset, whence);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->lseek(ctx->plugin->ctx, fp, offset, whence);
     }
 
     if (!ctx || !fp) {
@@ -818,8 +839,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _ioctl, (dmfsi_context_t ctx, v
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _sync, (dmfsi_context_t ctx, void* fp) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_commit(ctx->rw);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->sync(ctx->plugin->ctx, fp);
     }
 
     return 0;
@@ -827,8 +848,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _sync, (dmfsi_context_t ctx, vo
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _getc, (dmfsi_context_t ctx, void* fp) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_getc(ctx->rw, fp);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->getc(ctx->plugin->ctx, fp);
     }
 
     if (!ctx || !fp) {
@@ -854,8 +875,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _getc, (dmfsi_context_t ctx, vo
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _putc, (dmfsi_context_t ctx, void* fp, int c) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_putc(ctx->rw, fp, c);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->putc(ctx->plugin->ctx, fp, c);
     }
 
     // Read-only file system - putc not supported
@@ -867,8 +888,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _putc, (dmfsi_context_t ctx, vo
 
 dmod_dmfsi_dif_api_declaration( 2.0, dmffs, dmfsi_offset_t, _tell, (dmfsi_context_t ctx, void* fp) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_tell(ctx->rw, fp);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->tell(ctx->plugin->ctx, fp);
     }
 
     if (!ctx || !fp) {
@@ -881,8 +902,8 @@ dmod_dmfsi_dif_api_declaration( 2.0, dmffs, dmfsi_offset_t, _tell, (dmfsi_contex
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _eof, (dmfsi_context_t ctx, void* fp) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_eof(ctx->rw, fp);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->eof(ctx->plugin->ctx, fp);
     }
 
     if (!ctx || !fp) {
@@ -895,8 +916,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _eof, (dmfsi_context_t ctx, voi
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, dmfsi_size_t, _size, (dmfsi_context_t ctx, void* fp) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_size(ctx->rw, fp);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->size(ctx->plugin->ctx, fp);
     }
 
     if (!ctx || !fp) {
@@ -909,8 +930,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, dmfsi_size_t, _size, (dmfsi_context_
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _fflush, (dmfsi_context_t ctx, void* fp) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_commit(ctx->rw);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->fflush(ctx->plugin->ctx, fp);
     }
 
     return DMFSI_OK;
@@ -923,8 +944,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _error, (dmfsi_context_t ctx, v
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx, void** dp, const char* path) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_opendir(ctx->rw, dp, path);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->opendir(ctx->plugin->ctx, dp, path);
     }
 
     if (!ctx || !dp) {
@@ -961,6 +982,7 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx,
         // Invalid structure - for root only, we'll return data.bin
         if (handle->path[0] == '\0') {
             handle->entry_index = -1; // Special marker for data.bin
+            ctx->opens++;
             *dp = handle;
             return DMFSI_OK;
         }
@@ -979,14 +1001,15 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _opendir, (dmfsi_context_t ctx,
     handle->dir_end_offset = end;
     handle->in_dir = (handle->path[0] != '\0');
 
+    ctx->opens++;
     *dp = handle;
     return DMFSI_OK;
 }
 
 dmod_dmfsi_dif_api_declaration( 2.0, dmffs, int, _readdir, (dmfsi_context_t ctx, void* dp, dmfsi_dir_entry_t* entry) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_readdir(ctx->rw, dp, entry);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->readdir(ctx->plugin->ctx, dp, entry);
     }
 
     if (!ctx || !dp || !entry) {
@@ -1097,14 +1120,15 @@ dmod_dmfsi_dif_api_declaration( 2.0, dmffs, int, _readdir, (dmfsi_context_t ctx,
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _closedir, (dmfsi_context_t ctx, void* dp) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_closedir(ctx->rw, dp);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->closedir(ctx->plugin->ctx, dp);
     }
 
     if (!ctx || !dp) {
         return DMFSI_ERR_INVALID;
     }
     
+    if (ctx->opens) ctx->opens--;
     Dmod_Free(dp);
     return DMFSI_OK;
 }
@@ -1112,8 +1136,9 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _closedir, (dmfsi_context_t ctx
 // Create directory (only root supported)
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _mkdir, (dmfsi_context_t ctx, const char* path, int mode) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_mkdir(ctx->rw, path, mode);
+    upgrade_to_writable(ctx);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->mkdir(ctx->plugin->ctx, path, mode);
     }
 
     return DMFSI_ERR_NO_SPACE;
@@ -1122,8 +1147,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _mkdir, (dmfsi_context_t ctx, c
 // Check if directory exists
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _direxists, (dmfsi_context_t ctx, const char* path) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_direxists(ctx->rw, path);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->direxists(ctx->plugin->ctx, path);
     }
 
     if (!ctx || !path) {
@@ -1152,8 +1177,8 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _direxists, (dmfsi_context_t ct
 
 dmod_dmfsi_dif_api_declaration( 2.0, dmffs, int, _stat, (dmfsi_context_t ctx, const char* path, dmfsi_stat_t* stat) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_stat(ctx->rw, path, stat);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->stat(ctx->plugin->ctx, path, stat);
     }
 
     if (!ctx || !path || !stat) {
@@ -1207,8 +1232,9 @@ dmod_dmfsi_dif_api_declaration( 2.0, dmffs, int, _stat, (dmfsi_context_t ctx, co
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _unlink, (dmfsi_context_t ctx, const char* path) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_unlink(ctx->rw, path);
+    upgrade_to_writable(ctx);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->unlink(ctx->plugin->ctx, path);
     }
 
     return DMFSI_OK;
@@ -1216,8 +1242,9 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _unlink, (dmfsi_context_t ctx, 
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _rename, (dmfsi_context_t ctx, const char* oldpath, const char* newpath) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_rename(ctx->rw, oldpath, newpath);
+    upgrade_to_writable(ctx);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->rename(ctx->plugin->ctx, oldpath, newpath);
     }
 
     return DMFSI_ERR_NOT_FOUND;
@@ -1225,8 +1252,9 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _rename, (dmfsi_context_t ctx, 
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _chmod, (dmfsi_context_t ctx, const char* path, int mode) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_chmod(ctx->rw, path, mode);
+    upgrade_to_writable(ctx);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->chmod(ctx->plugin->ctx, path, mode);
     }
 
     return DMFSI_ERR_NOT_FOUND;
@@ -1234,8 +1262,9 @@ dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _chmod, (dmfsi_context_t ctx, c
 
 dmod_dmfsi_dif_api_declaration( 1.0, dmffs, int, _utime, (dmfsi_context_t ctx, const char* path, uint32_t atime, uint32_t mtime) )
 {
-    if (ctx != NULL && ctx->rw != NULL) {
-        return dmffs_rw_utime(ctx->rw, path, atime, mtime);
+    upgrade_to_writable(ctx);
+    if (ctx != NULL && ctx->plugin != NULL) {
+        return ctx->plugin->utime(ctx->plugin->ctx, path, atime, mtime);
     }
 
     // Not implemented, just return OK

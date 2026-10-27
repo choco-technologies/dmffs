@@ -23,6 +23,9 @@ int dmffs_medium_read(dmffs_medium_t* medium, uint8_t* buffer, size_t size);    
 /* Erases the whole medium, programs the image and reads it back: 0, -EROFS, -EIO, -EINVAL (too big) */
 int dmffs_medium_rewrite(dmffs_medium_t* medium, const uint8_t* image, size_t size);
 
+/* Where the medium is in memory (a RAM medium): 0 otherwise */
+uintptr_t dmffs_medium_address(const dmffs_medium_t* medium);
+
 void dmffs_medium_ram_free(void);                          /* (dmod_deinit) */
 
 #endif // DMFFS_MEDIUM_H

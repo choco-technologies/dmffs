@@ -36,6 +36,11 @@ typedef struct
     uint32_t        index;
 } dir_t;
 
+static bool valid(const dmffs_rw_t* rw)
+{
+    return rw != NULL && rw->magic == MAGIC_RW;
+}
+
 static int to_dmfsi(int error)
 {
     switch (error)
@@ -129,6 +134,15 @@ int dmffs_rw_commit(dmffs_rw_t* rw)
     return rc;
 }
 
+int dmffs_rw_medium_address(dmffs_rw_t* rw, uintptr_t* address, size_t* size)
+{
+    if (!valid(rw) || address == NULL || size == NULL)
+        return DMFSI_ERR_INVALID;
+    *address = dmffs_medium_address(rw->medium);
+    *size = dmffs_medium_size(rw->medium);
+    return DMFSI_OK;
+}
+
 int dmffs_rw_close(dmffs_rw_t* rw)
 {
     if (rw == NULL || rw->magic != MAGIC_RW)
@@ -143,11 +157,6 @@ int dmffs_rw_close(dmffs_rw_t* rw)
 }
 
 /* ---- Helpers ---- */
-
-static bool valid(const dmffs_rw_t* rw)
-{
-    return rw != NULL && rw->magic == MAGIC_RW;
-}
 
 static file_t* as_file(dmffs_rw_t* rw, void* fp)
 {

@@ -2,11 +2,13 @@
 #define ENABLE_DIF_REGISTRATIONS ON
 #include "dmod_test.h"
 #include "dmfsi.h"
+#include "dmffs.h"
 #include <string.h>
 
 /*
- * A writable mount through the DMFSI functions of the module - what dmvfs calls - on a medium in RAM
- * ("device=ram:32768", the same one for every mount). Changes stay in RAM until somebody flushes.
+ * The writable mount through the DMFSI functions of the modules - what dmvfs calls - on a medium in RAM
+ * ("device=ram:32768", the same one for every mount): dmffs_rw itself, and dmffs handing a mount over to it.
+ * Changes stay in RAM until somebody flushes.
  */
 #define DEVICE      "device=ram:32768"
 
@@ -34,14 +36,18 @@ static dmod_dmfsi_unlink_t g_unlink;
 static dmod_dmfsi_rename_t g_rename;
 static dmod_dmfsi_chmod_t g_chmod;
 static dmod_dmfsi_utime_t g_utime;
+static dmod_dmfsi_ioctl_t g_ioctl;
 
 static dmfsi_context_t g_fs;
 
-static bool load_functions(void)
+/* The DMFSI functions of a module: dmffs_rw, or dmffs (which hands a mount over to dmffs_rw when it has to write) */
+static bool bind(const char* module)
 {
-    if (Dmod_LoadModuleByName("dmffs") == NULL || !Dmod_EnableModule("dmffs", false, NULL))
+    if (Dmod_GetModuleContext(module) == NULL && Dmod_LoadModuleByName(module) == NULL)
         return false;
-    Dmod_Context_t* m = Dmod_GetModuleContext("dmffs");
+    if (!Dmod_IsModuleEnabled(module) && !Dmod_EnableModule(module, false, NULL))
+        return false;
+    Dmod_Context_t* m = Dmod_GetModuleContext(module);
     g_init = Dmod_GetDifFunction(m, dmod_dmfsi_init_sig);
     g_deinit = Dmod_GetDifFunction(m, dmod_dmfsi_deinit_sig);
     g_fopen = Dmod_GetDifFunction(m, dmod_dmfsi_fopen_sig);
@@ -66,14 +72,15 @@ static bool load_functions(void)
     g_rename = Dmod_GetDifFunction(m, dmod_dmfsi_rename_sig);
     g_chmod = Dmod_GetDifFunction(m, dmod_dmfsi_chmod_sig);
     g_utime = Dmod_GetDifFunction(m, dmod_dmfsi_utime_sig);
+    g_ioctl = Dmod_GetDifFunction(m, dmod_dmfsi_ioctl_sig);
     return g_init && g_deinit && g_fopen && g_fclose && g_fread && g_fwrite && g_lseek && g_tell && g_eof && g_size &&
            g_getc && g_putc && g_fflush && g_sync && g_opendir && g_readdir && g_closedir && g_stat && g_mkdir &&
-           g_direxists && g_unlink && g_rename && g_chmod && g_utime;
+           g_direxists && g_unlink && g_rename && g_chmod && g_utime && g_ioctl;
 }
 
 void dmod_test_setup(void)
 {
-    DMOD_TEST_EXPECT_TRUE(load_functions());
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs_rw"));
     /* A new, erased medium for every step: the store is replaced when the size differs */
     dmfsi_context_t blank = g_init("device=ram:4096");
     DMOD_TEST_EXPECT_NOT_NULL(blank);
@@ -338,4 +345,123 @@ DMOD_TEST_STEP(the_device_is_the_limit)
     DMOD_TEST_EXPECT_TRUE(g_size(g_fs, fp) <= 32768u);
     DMOD_TEST_EXPECT_EQ(g_fclose(g_fs, fp), DMFSI_OK);
     DMOD_TEST_EXPECT_EQ(g_fflush(g_fs, NULL), DMFSI_OK);        /* What fits is written */
+}
+
+/* ---- dmffs hands a mount over to dmffs_rw ---- */
+
+static void hex(char* out, uintptr_t value)
+{
+    static const char digits[] = "0123456789abcdef";
+    char tmp[2 * sizeof(uintptr_t)];
+    int n = 0;
+    do { tmp[n++] = digits[value & 15u]; value >>= 4; } while (value != 0);
+    *out++ = '0';
+    *out++ = 'x';
+    while (n > 0)
+        *out++ = tmp[--n];
+    *out = '\0';
+}
+
+/* "addr=<where the device is in memory>;size=<its size>" - the device the last mount of dmffs_rw used */
+static bool memory_config(char* config, size_t capacity, const char* extra)
+{
+    dmffs_medium_address_t where;
+    dmfsi_context_t rw = g_init(DEVICE);
+    int rc = (rw != NULL) ? g_ioctl(rw, NULL, DMFFS_RW_IOCTL_MEDIUM_ADDRESS, &where) : -1;
+    if (rw != NULL)
+        g_deinit(rw);
+    if (rc != DMFSI_OK || where.address == 0)
+        return false;
+    char address[2 * sizeof(uintptr_t) + 3], size[2 * sizeof(uintptr_t) + 3];
+    hex(address, where.address);
+    hex(size, where.size);
+    if (strlen(address) + strlen(size) + strlen(extra) + 16 > capacity)
+        return false;
+    strcpy(config, "addr=");
+    strcat(config, address);
+    strcat(config, ";size=");
+    strcat(config, size);
+    strcat(config, extra);
+    return true;
+}
+
+DMOD_TEST_STEP(dmffs_reads_what_dmffs_rw_wrote)
+{
+    char text[64], names[64], config[96];
+    DMOD_TEST_EXPECT_EQ(g_mkdir(g_fs, "/cfg", 0), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(write_file(g_fs, "/cfg/a.txt", "from dmffs_rw"), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(write_file(g_fs, "/top", "t"), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(g_sync(g_fs, NULL), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(g_deinit(g_fs), DMFSI_OK);
+    g_fs = NULL;
+    DMOD_TEST_EXPECT_TRUE(memory_config(config, sizeof(config), ""));
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs"));
+    dmfsi_context_t ro = g_init(config);                                         /* The read-only mount, straight from memory */
+    DMOD_TEST_EXPECT_NOT_NULL(ro);
+    DMOD_TEST_EXPECT_EQ(read_file(ro, "/cfg/a.txt", text, sizeof(text)), 13);    /* (the CRC entry at the end is skipped) */
+    DMOD_TEST_EXPECT_EQ(strcmp(text, "from dmffs_rw"), 0);
+    DMOD_TEST_EXPECT_EQ(list(ro, "/", names, sizeof(names)), 2);
+    void* fp = NULL;
+    DMOD_TEST_EXPECT_TRUE(g_fopen(ro, &fp, "/new", DMFSI_O_WRONLY | DMFSI_O_CREAT, 0) != DMFSI_OK);   /* No device= : read-only */
+    DMOD_TEST_EXPECT_TRUE(g_mkdir(ro, "/dir", 0) != DMFSI_OK);
+    g_deinit(ro);
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs_rw"));
+}
+
+DMOD_TEST_STEP(dmffs_becomes_writable_on_the_first_change)
+{
+    char text[64], config[128];
+    DMOD_TEST_EXPECT_EQ(write_file(g_fs, "/old", "old"), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(g_deinit(g_fs), DMFSI_OK);
+    g_fs = NULL;
+    DMOD_TEST_EXPECT_TRUE(memory_config(config, sizeof(config), ";device=ram:32768"));
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs"));
+    dmfsi_context_t fs = g_init(config);
+    DMOD_TEST_EXPECT_NOT_NULL(fs);
+    DMOD_TEST_EXPECT_EQ(read_file(fs, "/old", text, sizeof(text)), 3);            /* Read straight from memory */
+    DMOD_TEST_EXPECT_EQ(g_mkdir(fs, "/made", 0), DMFSI_OK);                       /* The first change: dmffs_rw takes over */
+    DMOD_TEST_EXPECT_EQ(write_file(fs, "/made/new", "written"), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(read_file(fs, "/old", text, sizeof(text)), 3);            /* What was there is still there */
+    DMOD_TEST_EXPECT_EQ(read_file(fs, "/made/new", text, sizeof(text)), 7);
+    DMOD_TEST_EXPECT_EQ(g_sync(fs, NULL), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(g_deinit(fs), DMFSI_OK);
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs_rw"));
+    g_fs = g_init(DEVICE);                                                         /* The device holds both */
+    DMOD_TEST_EXPECT_NOT_NULL(g_fs);
+    DMOD_TEST_EXPECT_EQ(read_file(g_fs, "/old", text, sizeof(text)), 3);
+    DMOD_TEST_EXPECT_EQ(read_file(g_fs, "/made/new", text, sizeof(text)), 7);
+}
+
+DMOD_TEST_STEP(a_mount_with_something_open_does_not_become_writable)
+{
+    char config[128];
+    DMOD_TEST_EXPECT_EQ(write_file(g_fs, "/f", "x"), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(g_deinit(g_fs), DMFSI_OK);
+    g_fs = NULL;
+    DMOD_TEST_EXPECT_TRUE(memory_config(config, sizeof(config), ";device=ram:32768"));
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs"));
+    dmfsi_context_t fs = g_init(config);
+    DMOD_TEST_EXPECT_NOT_NULL(fs);
+    void* fp = NULL;
+    DMOD_TEST_EXPECT_EQ(g_fopen(fs, &fp, "/f", DMFSI_O_RDONLY, 0), DMFSI_OK);
+    DMOD_TEST_EXPECT_TRUE(g_mkdir(fs, "/d", 0) != DMFSI_OK);                       /* A reader is on the flash image */
+    DMOD_TEST_EXPECT_EQ(g_fclose(fs, fp), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(g_mkdir(fs, "/d", 0), DMFSI_OK);                           /* Nothing open: it becomes writable */
+    g_deinit(fs);
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs_rw"));
+}
+
+DMOD_TEST_STEP(a_mount_with_only_a_device_is_writable_at_once)
+{
+    char text[32];
+    DMOD_TEST_EXPECT_EQ(g_deinit(g_fs), DMFSI_OK);
+    g_fs = NULL;
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs"));
+    dmfsi_context_t fs = g_init(DEVICE);                    /* Nowhere to read from but the device: dmffs_rw it is */
+    DMOD_TEST_EXPECT_NOT_NULL(fs);
+    DMOD_TEST_EXPECT_EQ(write_file(fs, "/direct", "d"), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(g_fflush(fs, NULL), DMFSI_OK);
+    DMOD_TEST_EXPECT_EQ(read_file(fs, "/direct", text, sizeof(text)), 1);
+    g_deinit(fs);
+    DMOD_TEST_EXPECT_TRUE(bind("dmffs_rw"));
 }

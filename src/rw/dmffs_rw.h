@@ -2,6 +2,7 @@
 #define DMFFS_RW_H
 
 #include "dmfsi.h"
+#include <stdint.h>
 
 /*
  * The writable mount ("device=..."): the file system is read from the medium into RAM at the mount, every change is
@@ -14,6 +15,7 @@ typedef struct dmffs_rw dmffs_rw_t;
 
 dmffs_rw_t* dmffs_rw_open(const char* device);
 int dmffs_rw_close(dmffs_rw_t* rw);                     /* writes what is pending, then frees */
+int dmffs_rw_medium_address(dmffs_rw_t* rw, uintptr_t* address, size_t* size);   /* (a RAM medium) */
 int dmffs_rw_commit(dmffs_rw_t* rw);                    /* writes what is pending (nothing: no write) */
 
 int dmffs_rw_fopen(dmffs_rw_t* rw, void** fp, const char* path, int mode, int attr);

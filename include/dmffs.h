@@ -40,4 +40,17 @@ typedef enum {
     DMFFS_TLV_TYPE_END     = 0xFFFFFFFF     //!< End of TLV entries
 } dmffs_tlv_type_t;
 
+/**
+ * @brief ioctl of a writable mount (the module dmffs_rw): where the device is, when it can be read straight from
+ *        memory (a medium in RAM; a flash node reports it with its own ioctl)
+ *
+ * request DMFFS_RW_IOCTL_MEDIUM_ADDRESS, arg: dmffs_medium_address_t*
+ */
+#define DMFFS_RW_IOCTL_MEDIUM_ADDRESS   0x4D01
+
+typedef struct {
+    uintptr_t address;      //!< where the first byte of the device is; 0 when the device is not memory mapped here
+    size_t    size;         //!< its size
+} dmffs_medium_address_t;
+
 #endif // DMFFS_H

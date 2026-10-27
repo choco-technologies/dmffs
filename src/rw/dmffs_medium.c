@@ -119,6 +119,11 @@ size_t dmffs_medium_size(const dmffs_medium_t* medium)
     return medium->size;
 }
 
+uintptr_t dmffs_medium_address(const dmffs_medium_t* medium)
+{
+    return (uintptr_t)medium->ram;
+}
+
 bool dmffs_medium_writable(const dmffs_medium_t* medium)
 {
     return medium->writable;

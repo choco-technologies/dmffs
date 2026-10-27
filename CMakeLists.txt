@@ -80,9 +80,7 @@ set(DMOD_STACK_SIZE         1024)
 dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     # List of source files - can include C and C++ files
     src/dmffs.c
-    src/dmffs_tree.c
-    src/dmffs_medium.c
-    src/dmffs_rw.c
+    src/dmffs_plugin.c
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE
@@ -92,8 +90,8 @@ target_include_directories(${DMOD_MODULE_NAME} PRIVATE
 # Link to DMFSI interface
 target_link_libraries(${DMOD_MODULE_NAME} dmfsi_if)
 
-# A writable mount ("device=...") locks with dmosi and talks to a block device node (dmdrvi: headers only)
-dmod_link_modules(${DMOD_MODULE_NAME} dmosi dmdrvi)
+# The writable half is a module of its own, loaded on demand (see src/rw)
+add_subdirectory(src/rw)
 
 # ======================================================================
 #               make_dmffs Application
