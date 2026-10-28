@@ -27,8 +27,12 @@ jobs:
       - name: List available architectures
         id: list-archs
         run: |
-          DMOD_SRC_DIR=$(find build_discovery -path "*/_deps/dmod-src" -type d | head -1)
-          
+          # FetchContent puts dmod right here; a search for "_deps/dmod-src" would also find the object
+          # directory of the test (tests/CMakeFiles/test_dmffs.dir/__/_deps/dmod-src) and, depending on the
+          # order find returns them in, take that one: no architectures, an empty build matrix
+          DMOD_SRC_DIR=build_discovery/_deps/dmod-src
+          test -d "${DMOD_SRC_DIR}/configs/arch"
+
           # create JSON array
           ARCHS=$(find ${DMOD_SRC_DIR}/configs/arch -name "tools-cfg.cmake" | \
             sed "s|${DMOD_SRC_DIR}/configs/arch/||g" | \
