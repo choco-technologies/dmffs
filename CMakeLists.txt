@@ -80,6 +80,7 @@ set(DMOD_STACK_SIZE         1024)
 dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     # List of source files - can include C and C++ files
     src/dmffs.c
+    src/dmffs_plugin.c
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE
@@ -88,6 +89,9 @@ target_include_directories(${DMOD_MODULE_NAME} PRIVATE
 
 # Link to DMFSI interface
 target_link_libraries(${DMOD_MODULE_NAME} dmfsi_if)
+
+# The writable half is a module of its own, loaded on demand (see src/rw)
+add_subdirectory(src/rw)
 
 # ======================================================================
 #               make_dmffs Application
@@ -100,3 +104,6 @@ dmod_add_executable(make_dmffs ${DMOD_MODULE_VERSION}
 target_include_directories(make_dmffs PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+enable_testing()
+add_subdirectory(tests)
